@@ -12,7 +12,7 @@
 # Computes RMSD vs. frame using a reference frame (default index 0).
 ###############################################
 echo "Running RMSD analysis..."
-fastmda rmsd -traj path/to/trajectory.dcd -top path/to/topology.pdb -o rmsd_output --frames 0,-1,10 --atoms "protein and name CA" --ref 0
+fastmda rmsd -traj path/to/trajectory.dcd -top path/to/topology.pdb -o rmsd_output --frames 0,-1,10 --atoms "protein and name CA" --reference-frame 0
 echo "RMSD analysis completed. Output in rmsd_output/"
 
 ###############################################

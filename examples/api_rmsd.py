@@ -28,7 +28,7 @@ def main():
     # ---------------------------
     # Run RMSD Analysis
     # ---------------------------
-    rmsd_analysis = fastmda.rmsd(ref=0)
+    rmsd_analysis = fastmda.rmsd(reference_frame=0)
     
 
     # Optinally, retrieve data and/or replot/customized figures

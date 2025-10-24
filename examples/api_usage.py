@@ -28,7 +28,7 @@ def main():
     # ---------------------------
     # Run RMSD Analysis
     # ---------------------------
-    rmsd_analysis = fastmda.rmsd(ref=0)
+    rmsd_analysis = fastmda.rmsd(reference_frame=0)
     print("RMSD Data:", rmsd_analysis.data)
     rmsd_plot_file = rmsd_analysis.plot()
     print("RMSD plot saved to:", rmsd_plot_file)

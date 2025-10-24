@@ -12,7 +12,7 @@ Usage:
   - Run this script to perform various MD analyses.
 """
 
-from FastMDAnalysis import FastMDAnalysis
+from fastmdanalysis import FastMDAnalysis
 
 def main():
     # Specify the trajectory and topology file paths.

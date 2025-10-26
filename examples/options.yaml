@@ -1,0 +1,14 @@
+rmsd:
+  ref: 0
+  align: true
+rmsf:
+  by_residue: true
+rg:
+  by_chain: false
+cluster:
+  methods: [dbscan, hierarchical]
+  n_clusters: 5
+  eps: 0.6
+  min_samples: 
+
+

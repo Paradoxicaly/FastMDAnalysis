@@ -6,9 +6,9 @@ rmsf:
 rg:
   by_chain: false
 cluster:
-  methods: [dbscan, hierarchical]
+  methods: [dbscan, kmeans, hierarchical]
   n_clusters: 5
-  eps: 0.6
-  min_samples: 
+  eps: 0.28
+  min_samples: 5 
 
 

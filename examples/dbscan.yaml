@@ -1,0 +1,9 @@
+rmsd:
+  ref: 0
+  align: true
+cluster:
+  methods: [dbscan]
+  n_clusters: 3
+  eps: 0.3 
+  min_samples: 5
+

@@ -73,8 +73,8 @@ class Ubiquitin:
     md_engine : str
         Molecular dynamics simulation engine.
     """
-    traj = _get_data_path("ubiquitin.dcd")
-    top = _get_data_path("ubiquitin.pdb")
+    traj = _get_data_path("ubiquitin/Q95.dcd")
+    top = _get_data_path("ubiquitin/topology.pdb")
     time_step = 0.002
     force_field = "CHARMM36m"
     integrator = "Legenvin"

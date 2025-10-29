@@ -5,9 +5,12 @@ import statistics
 import sys
 import time
 import tracemalloc
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import csv
 from pathlib import Path
+import types
+import argparse
+import math
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -17,6 +20,7 @@ if str(SRC_ROOT) not in sys.path:
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 import numpy as np
 
 import mdtraj as md
@@ -24,8 +28,9 @@ import MDAnalysis as mda
 from MDAnalysis.analysis import rms
 
 from fastmdanalysis.analysis import rmsf as fast_rmsf
-from fastmdanalysis.datasets import TrpCage
+from dataset_config import get_dataset_config, list_datasets
 from instrumentation import Instrumentation
+from palette import colors_for, label_for_tool
 
 
 REPEATS = 10
@@ -39,11 +44,26 @@ SNIPPET_FILES = {
     "mdanalysis": SNIPPET_ROOT / "mdanalysis_script.py",
 }
 
-TRAJ_FILE = Path(TrpCage.traj)
-TOPOLOGY_FILE = Path(TrpCage.top)
+DEFAULT_DATASET = "trpcage"
+DATASET_SLUG = DEFAULT_DATASET
+DATASET_LABEL = ""
+TRAJ_FILE = Path()
+TOPOLOGY_FILE = Path()
+OUTPUT_ROOT = PROJECT_ROOT / "benchmarks" / "results"
 
-OUTPUT_ROOT = PROJECT_ROOT / "benchmarks" / "results" / "rmsf_trpcage"
-OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+
+def _set_dataset(slug: str) -> None:
+    global DATASET_SLUG, DATASET_LABEL, TRAJ_FILE, TOPOLOGY_FILE, OUTPUT_ROOT
+    config = get_dataset_config(slug)
+    DATASET_SLUG = config.slug
+    DATASET_LABEL = config.label
+    TRAJ_FILE = Path(config.traj)
+    TOPOLOGY_FILE = Path(config.top)
+    OUTPUT_ROOT = PROJECT_ROOT / "benchmarks" / "results" / f"rmsf_{DATASET_SLUG}"
+    OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+
+
+_set_dataset(DEFAULT_DATASET)
 
 
 INSTRUMENT = Instrumentation(TOOL_ORDER)
@@ -51,26 +71,47 @@ INSTRUMENT = Instrumentation(TOOL_ORDER)
 
 @dataclass
 class RunMetrics:
-    elapsed_s: float
+    calc_s: float
+    plot_s: float
+    total_s: float
+    calc_mem_mb: float
+    plot_mem_mb: float
     peak_mem_mb: float
 
+    @property
+    def elapsed_s(self) -> float:
+        return self.total_s
 
-def _measure_execution(tool: str, func):
+
+def _noop_method(self, *args, **kwargs):
+    return None
+
+
+def _measure_tool(tool: str, runner):
     INSTRUMENT.record_attempt(tool)
     tracemalloc.start()
-    start = time.perf_counter()
+    start_total = time.perf_counter()
     try:
-        result = func()
+        values, calc_time, plot_time, generated, calc_mem_mb, plot_mem_mb = runner()
     except Exception:
         INSTRUMENT.record_exception(tool)
         tracemalloc.stop()
         raise
-    elapsed = time.perf_counter() - start
+    total_elapsed = time.perf_counter() - start_total
     current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
-    peak_mb = peak / (1024 ** 2)
+    peak_mb = max(peak / (1024 ** 2), calc_mem_mb, plot_mem_mb)
     INSTRUMENT.record_success(tool)
-    return result, RunMetrics(elapsed_s=elapsed, peak_mem_mb=peak_mb)
+    if generated:
+        INSTRUMENT.record_files(tool, generated)
+    return values, RunMetrics(
+        calc_s=calc_time,
+        plot_s=plot_time,
+        total_s=total_elapsed,
+        calc_mem_mb=calc_mem_mb,
+        plot_mem_mb=plot_mem_mb,
+        peak_mem_mb=peak_mb,
+    )
 
 
 def _save_bar_plot(values: np.ndarray, out_path: Path, title: str) -> None:
@@ -85,7 +126,14 @@ def _save_bar_plot(values: np.ndarray, out_path: Path, title: str) -> None:
     plt.close(fig)
 
 
-def _run_fastmdanalysis(traj, rep_dir: Path) -> np.ndarray:
+def _run_fastmdanalysis(
+    traj,
+    rep_dir: Path,
+    dataset_label: str,
+    *,
+    timing_only: bool,
+    do_plot: bool,
+) -> tuple[np.ndarray, float, float, list[Path]]:
     INSTRUMENT.record_modules("fastmdanalysis", [
         "fastmdanalysis.analysis.rmsf",
         "fastmdanalysis.datasets",
@@ -96,16 +144,48 @@ def _run_fastmdanalysis(traj, rep_dir: Path) -> np.ndarray:
         "RMSFAnalysis.plot",
     ])
     analysis = fast_rmsf.RMSFAnalysis(traj, atoms=ATOM_SELECTION, output=str(rep_dir))
-    before = {p.name for p in rep_dir.glob("*")}
+    original_save = analysis._save_data
+    original_plot = analysis.plot
+    analysis._save_data = types.MethodType(_noop_method, analysis)
+    analysis.plot = types.MethodType(_noop_method, analysis)
+
+    tracemalloc.reset_peak()
+    start_calc = time.perf_counter()
     analysis.run()
-    after = {p.name for p in rep_dir.glob("*")}
-    new_files = [rep_dir / name for name in after - before]
-    if new_files:
-        INSTRUMENT.record_files("fastmdanalysis", new_files)
-    return analysis.data.flatten()
+    calc_time = time.perf_counter() - start_calc
+    calc_peak_mb = tracemalloc.get_traced_memory()[1] / (1024 ** 2)
+    values = analysis.data.reshape(-1).astype(float)
+
+    analysis._save_data = original_save
+    analysis.plot = original_plot
+
+    generated: list[Path] = []
+    plot_time = 0.0
+    plot_peak_mb = 0.0
+    if not timing_only:
+        tracemalloc.reset_peak()
+        start_plot = time.perf_counter()
+        data_path = rep_dir / "rmsf.dat"
+        np.savetxt(data_path, values.reshape(-1, 1), header="rmsf", fmt="%.6f")
+        generated.append(data_path)
+        if do_plot:
+            plot_path = rep_dir / "rmsf.png"
+            _save_bar_plot(values, plot_path, f"RMSF per Atom ({dataset_label})")
+            generated.append(plot_path)
+        plot_time = time.perf_counter() - start_plot
+        plot_peak_mb = tracemalloc.get_traced_memory()[1] / (1024 ** 2)
+
+    return values, calc_time, plot_time, generated, calc_peak_mb, plot_peak_mb
 
 
-def _run_mdtraj(traj, rep_dir: Path) -> np.ndarray:
+def _run_mdtraj(
+    traj,
+    rep_dir: Path,
+    dataset_label: str,
+    *,
+    timing_only: bool,
+    do_plot: bool,
+) -> tuple[np.ndarray, float, float, list[Path]]:
     INSTRUMENT.record_modules("mdtraj", [
         "mdtraj",
         "numpy",
@@ -117,18 +197,41 @@ def _run_mdtraj(traj, rep_dir: Path) -> np.ndarray:
         "numpy.savetxt",
         "_save_bar_plot",
     ])
+    tracemalloc.reset_peak()
+    start_calc = time.perf_counter()
     avg_xyz = traj.xyz.mean(axis=0, keepdims=True)
     reference = md.Trajectory(avg_xyz, traj.topology)
     values = md.rmsf(traj, reference)
-    out_data = rep_dir / "rmsf.dat"
-    np.savetxt(out_data, values.reshape(-1, 1), header="rmsf", fmt="%.6f")
-    plot_path = rep_dir / "rmsf.png"
-    _save_bar_plot(values, plot_path, "RMSF per Atom (MDTraj)")
-    INSTRUMENT.record_files("mdtraj", [out_data, plot_path])
-    return values
+    calc_time = time.perf_counter() - start_calc
+    calc_peak_mb = tracemalloc.get_traced_memory()[1] / (1024 ** 2)
+
+    generated: list[Path] = []
+    plot_time = 0.0
+    plot_peak_mb = 0.0
+    if not timing_only:
+        tracemalloc.reset_peak()
+        start_plot = time.perf_counter()
+        out_data = rep_dir / "rmsf.dat"
+        np.savetxt(out_data, values.reshape(-1, 1), header="rmsf", fmt="%.6f")
+        generated.append(out_data)
+        if do_plot:
+            plot_path = rep_dir / "rmsf.png"
+            _save_bar_plot(values, plot_path, f"RMSF per Atom ({dataset_label})")
+            generated.append(plot_path)
+        plot_time = time.perf_counter() - start_plot
+        plot_peak_mb = tracemalloc.get_traced_memory()[1] / (1024 ** 2)
+
+    return values, calc_time, plot_time, generated, calc_peak_mb, plot_peak_mb
 
 
-def _run_mdanalysis(universe, rep_dir: Path) -> np.ndarray:
+def _run_mdanalysis(
+    universe,
+    rep_dir: Path,
+    dataset_label: str,
+    *,
+    timing_only: bool,
+    do_plot: bool,
+) -> tuple[np.ndarray, float, float, list[Path]]:
     INSTRUMENT.record_modules("mdanalysis", [
         "MDAnalysis",
         "MDAnalysis.analysis.rms",
@@ -141,33 +244,56 @@ def _run_mdanalysis(universe, rep_dir: Path) -> np.ndarray:
         "_save_bar_plot",
     ])
     universe.trajectory[0]
+    tracemalloc.reset_peak()
+    start_calc = time.perf_counter()
     analysis = rms.RMSF(universe.atoms).run()
     values = analysis.results.rmsf / 10.0
-    data_path = rep_dir / "rmsf.dat"
-    plot_path = rep_dir / "rmsf.png"
-    np.savetxt(data_path, values.reshape(-1, 1), header="rmsf", fmt="%.6f")
-    _save_bar_plot(values, plot_path, "RMSF per Atom (MDAnalysis)")
-    INSTRUMENT.record_files("mdanalysis", [data_path, plot_path])
-    return values
+    calc_time = time.perf_counter() - start_calc
+    calc_peak_mb = tracemalloc.get_traced_memory()[1] / (1024 ** 2)
+
+    generated: list[Path] = []
+    plot_time = 0.0
+    plot_peak_mb = 0.0
+    if not timing_only:
+        tracemalloc.reset_peak()
+        start_plot = time.perf_counter()
+        data_path = rep_dir / "rmsf.dat"
+        np.savetxt(data_path, values.reshape(-1, 1), header="rmsf", fmt="%.6f")
+        generated.append(data_path)
+        if do_plot:
+            plot_path = rep_dir / "rmsf.png"
+            _save_bar_plot(values, plot_path, f"RMSF per Atom ({dataset_label})")
+            generated.append(plot_path)
+        plot_time = time.perf_counter() - start_plot
+        plot_peak_mb = tracemalloc.get_traced_memory()[1] / (1024 ** 2)
+
+    return values, calc_time, plot_time, generated, calc_peak_mb, plot_peak_mb
+
+
+def _stats(values: list[float]) -> dict[str, float]:
+    if not values:
+        return {"mean": 0.0, "stdev": 0.0, "min": 0.0, "max": 0.0}
+    mean = statistics.mean(values)
+    stdev = statistics.stdev(values) if len(values) > 1 else 0.0
+    return {"mean": mean, "stdev": stdev, "min": min(values), "max": max(values)}
 
 
 def _summarize(metrics: list[RunMetrics]) -> dict:
-    elapsed = [m.elapsed_s for m in metrics]
+    calc = [m.calc_s for m in metrics]
+    plot = [m.plot_s for m in metrics]
+    total = [m.total_s for m in metrics]
+    calc_mem = [m.calc_mem_mb for m in metrics]
+    plot_mem = [m.plot_mem_mb for m in metrics]
     memory = [m.peak_mem_mb for m in metrics]
     return {
         "runs": len(metrics),
-        "elapsed_s": {
-            "mean": statistics.mean(elapsed),
-            "stdev": statistics.stdev(elapsed) if len(elapsed) > 1 else 0.0,
-            "min": min(elapsed),
-            "max": max(elapsed),
-        },
-        "peak_mem_mb": {
-            "mean": statistics.mean(memory),
-            "stdev": statistics.stdev(memory) if len(memory) > 1 else 0.0,
-            "min": min(memory),
-            "max": max(memory),
-        },
+        "calc_s": _stats(calc),
+        "plot_s": _stats(plot),
+        "total_s": _stats(total),
+        "calc_mem_mb": _stats(calc_mem),
+        "plot_mem_mb": _stats(plot_mem),
+        "elapsed_s": _stats(total),
+        "peak_mem_mb": _stats(memory),
     }
 
 
@@ -199,37 +325,236 @@ def _collect_loc_metrics() -> dict[str, dict[str, int]]:
 
 
 def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], output_dir: Path) -> None:
-    labels = [tool.capitalize() if tool != "fastmdanalysis" else "FastMDAnalysis" for tool in TOOL_ORDER]
+    labels = [label_for_tool(tool) for tool in TOOL_ORDER]
     bar_positions = np.arange(len(TOOL_ORDER))
+    primary_colors = colors_for(TOOL_ORDER, variant="primary")
+    secondary_colors = colors_for(TOOL_ORDER, variant="secondary")
 
-    runtimes = [summary[tool]["elapsed_s"]["mean"] for tool in TOOL_ORDER]
+    def _headroom(means: list[float], errs: list[float]) -> float:
+        if not means:
+            return 1.0
+        values = np.asarray(means, dtype=float)
+        errors = np.asarray(errs if errs else np.zeros_like(values), dtype=float)
+        combined = values + errors
+        max_val = float(combined.max()) if combined.size else 0.0
+        if max_val <= 0:
+            return 1.0
+        return max_val * 1.25
+
+    def _nice_ticks(max_value: float) -> list[float]:
+        if max_value <= 0:
+            return [0.0]
+        magnitude = 10 ** math.floor(math.log10(max_value))
+        for multiplier in (1, 2, 5, 10):
+            step = multiplier * magnitude
+            if max_value / step <= 6:
+                break
+        else:
+            step = magnitude
+        upper = step * math.ceil(max_value / step)
+        count = int(upper / step)
+        return [step * idx for idx in range(count + 1)]
+
+    def _apply_yaxis(ax, ymax: float) -> float:
+        ticks = _nice_ticks(ymax)
+        upper = ticks[-1] if ticks else 0.0
+        if upper <= 0:
+            upper = 1.0
+            ticks = [0.0, upper]
+        ax.set_ylim(0, upper)
+        ax.set_yticks(ticks)
+        return upper
+
+    def _annotate_small(ax, bars, values: list[float], threshold: float = 0.2) -> None:
+        for bar, value in zip(bars, values):
+            if value <= threshold:
+                offset = max(0.01, value * 0.4)
+                text_value = f"{value:.2f}"
+                if text_value == "0.00" and value > 0:
+                    text_value = f"{value:.3f}"
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    value + offset,
+                    text_value,
+                    ha="center",
+                    va="bottom",
+                    fontsize=10,
+                )
+    def _annotate_small_mem(ax, bars, values: list[float], threshold: float = 1.0) -> None:
+        for bar, value in zip(bars, values):
+            if value <= threshold:
+                offset = max(0.5, value * 0.1)
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    value + offset,
+                    f"{value:.2f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=10,
+                )
+
+    calc_means = [summary[tool]["calc_s"]["mean"] for tool in TOOL_ORDER]
+    plot_means = [summary[tool]["plot_s"]["mean"] for tool in TOOL_ORDER]
+    plot_display: list[float] = [0.0 for _ in TOOL_ORDER]
+    total_display: list[float] = []
+    total_err_display: list[float] = []
+    for idx, tool in enumerate(TOOL_ORDER):
+        total_display.append(calc_means[idx])
+        total_err_display.append(summary[tool]["calc_s"]["stdev"])
+    limited_ylim = _headroom(total_display, total_err_display)
+    total_full_means = [summary[tool]["total_s"]["mean"] for tool in TOOL_ORDER]
+    total_full_err = [summary[tool]["total_s"]["stdev"] for tool in TOOL_ORDER]
+    shared_ylim = max(limited_ylim, _headroom(total_full_means, total_full_err))
+    runtime_means = [summary[tool]["elapsed_s"]["mean"] for tool in TOOL_ORDER]
     runtime_err = [summary[tool]["elapsed_s"]["stdev"] for tool in TOOL_ORDER]
+    runtime_ylim = max(_headroom(runtime_means, runtime_err), shared_ylim)
+
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.bar(bar_positions, runtimes, yerr=runtime_err, capsize=5, color=["#4472C4", "#ED7D31", "#A5A5A5"])
+    ax.bar(
+        bar_positions,
+        runtime_means,
+        yerr=runtime_err,
+        capsize=5,
+        color=primary_colors,
+        error_kw={"ecolor": "#444444"},
+    )
     ax.set_xticks(bar_positions)
-    ax.set_xticklabels(labels, rotation=20)
+    ax.set_xticklabels(labels)
     ax.set_ylabel("Mean Runtime (s)")
-    ax.set_title("RMSF Runtime Comparison (Trp-cage)")
+    ax.set_title(f"RMSF Runtime Comparison ({DATASET_LABEL})")
     ax.grid(axis="y", alpha=0.3)
+    _apply_yaxis(ax, runtime_ylim)
     fig.tight_layout()
     fig.savefig(output_dir / "runtime_summary.png", bbox_inches="tight")
     plt.close(fig)
 
-    memories = [summary[tool]["peak_mem_mb"]["mean"] for tool in TOOL_ORDER]
-    memory_err = [summary[tool]["peak_mem_mb"]["stdev"] for tool in TOOL_ORDER]
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.bar(bar_positions, memories, yerr=memory_err, capsize=5, color=["#4472C4", "#ED7D31", "#A5A5A5"])
+    calc_bar_limited = ax.bar(bar_positions, calc_means, color=primary_colors, label="Computation")
+    limited_handles = [calc_bar_limited]
+    limited_labels = ["Computation"]
+    has_plot_component = any(value > 1e-9 for value in plot_display)
+    plot_bar_limited = None
+    if has_plot_component:
+        plot_bar_limited = ax.bar(
+            bar_positions,
+            plot_display,
+            bottom=calc_means,
+            color=secondary_colors,
+            label="Plotting",
+        )
+        limited_handles.append(plot_bar_limited)
+        limited_labels.append("Plotting")
+    if any(total_err_display):
+        ax.errorbar(
+            bar_positions,
+            total_display,
+            yerr=total_err_display,
+            fmt="none",
+            ecolor="#444444",
+            capsize=5,
+        )
     ax.set_xticks(bar_positions)
-    ax.set_xticklabels(labels, rotation=20)
-    ax.set_ylabel("Mean Peak Memory (MB)")
-    ax.set_title("RMSF Peak Memory Comparison (Trp-cage)")
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("Mean Runtime (s)")
+    ax.set_title(f"RMSF Runtime Breakdown ({DATASET_LABEL})")
     ax.grid(axis="y", alpha=0.3)
+    if len(limited_handles) > 1:
+        ax.legend(limited_handles, limited_labels)
+    _apply_yaxis(ax, runtime_ylim)
+    _annotate_small(ax, calc_bar_limited, calc_means)
+    fig.tight_layout()
+    fig.savefig(output_dir / "runtime_summary_split.png", bbox_inches="tight")
+    plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    calc_bar_full = ax.bar(bar_positions, calc_means, color=primary_colors, label="Computation")
+    full_handles = [calc_bar_full]
+    full_labels = ["Computation"]
+    has_plot_full = any(value > 1e-9 for value in plot_means)
+    plot_bar_full = None
+    if has_plot_full:
+        plot_bar_full = ax.bar(
+            bar_positions,
+            plot_means,
+            bottom=calc_means,
+            color=secondary_colors,
+            label="Plotting",
+        )
+        full_handles.append(plot_bar_full)
+        full_labels.append("Plotting")
+    if any(total_full_err):
+        ax.errorbar(
+            bar_positions,
+            total_full_means,
+            yerr=total_full_err,
+            fmt="none",
+            ecolor="#444444",
+            capsize=5,
+        )
+    ax.set_xticks(bar_positions)
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("Mean Runtime (s)")
+    ax.set_title(f"RMSF Runtime Breakdown (All Tools) ({DATASET_LABEL})")
+    ax.grid(axis="y", alpha=0.3)
+    if len(full_handles) > 1:
+        ax.legend(full_handles, full_labels)
+    _apply_yaxis(ax, runtime_ylim)
+    _annotate_small(ax, calc_bar_full, calc_means)
+    fig.tight_layout()
+    fig.savefig(output_dir / "runtime_summary_split_all.png", bbox_inches="tight")
+    plt.close(fig)
+
+    calc_mem_means = [summary[tool]["calc_mem_mb"]["mean"] for tool in TOOL_ORDER]
+    plot_mem_means = [summary[tool]["plot_mem_mb"]["mean"] for tool in TOOL_ORDER]
+    mem_totals = [summary[tool]["peak_mem_mb"]["mean"] for tool in TOOL_ORDER]
+    mem_err_values = [summary[tool]["peak_mem_mb"]["stdev"] for tool in TOOL_ORDER]
+    plot_mem_display = [max(total - calc, 0.0) for calc, total in zip(calc_mem_means, mem_totals)]
+    fig, ax = plt.subplots(figsize=(8, 5))
+    calc_mem_bars = ax.bar(bar_positions, calc_mem_means, color=primary_colors, label="Computation")
+    mem_handles = [calc_mem_bars]
+    mem_labels = ["Computation"]
+    has_plot_mem = any(value > 1e-9 for value in plot_mem_display)
+    plot_mem_bars = None
+    if has_plot_mem:
+        plot_mem_bars = ax.bar(
+            bar_positions,
+            plot_mem_display,
+            bottom=calc_mem_means,
+            color=secondary_colors,
+            label="Plotting",
+        )
+        mem_handles.append(plot_mem_bars)
+        mem_labels.append("Plotting")
+    if any(mem_err_values):
+        mem_err_array = np.asarray(mem_err_values, dtype=float)
+        mem_err = np.vstack([
+            np.zeros_like(mem_err_array),
+            mem_err_array,
+        ])
+        ax.errorbar(
+            bar_positions,
+            mem_totals,
+            yerr=mem_err,
+            fmt="none",
+            ecolor="#444444",
+            capsize=5,
+        )
+    ax.set_xticks(bar_positions)
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("Mean Peak Memory (MB)")
+    ax.set_title(f"RMSF Peak Memory Breakdown ({DATASET_LABEL})")
+    ax.grid(axis="y", alpha=0.3)
+    if len(mem_handles) > 1:
+        ax.legend(mem_handles, mem_labels)
+    ax.set_ylim(0, _headroom(mem_totals, mem_err_values))
+    target_bars = plot_mem_bars if has_plot_mem and plot_mem_bars is not None else calc_mem_bars
+    _annotate_small_mem(ax, target_bars, mem_totals)
     fig.tight_layout()
     fig.savefig(output_dir / "memory_summary.png", bbox_inches="tight")
     plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    runtime_data = [[m.elapsed_s for m in runs[tool]] for tool in TOOL_ORDER]
+    runtime_data = [[m.total_s for m in runs[tool]] for tool in TOOL_ORDER]
     boxplot_kwargs = dict(
         patch_artist=True,
         boxprops=dict(facecolor="#D9E1F2", color="#2F5597"),
@@ -239,39 +564,97 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
         ax.boxplot(runtime_data, tick_labels=labels, **boxplot_kwargs)
     except TypeError:
         ax.boxplot(runtime_data, labels=labels, **boxplot_kwargs)
+    ax.set_xticklabels(labels)
     ax.set_ylabel("Runtime per Run (s)")
-    ax.set_title("RMSF Runtime Distribution (Trp-cage)")
+    ax.set_title(f"RMSF Runtime Distribution ({DATASET_LABEL})")
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
     fig.savefig(output_dir / "runtime_distribution.png", bbox_inches="tight")
     plt.close(fig)
 
+    fig, ax = plt.subplots(figsize=(8, 5))
+    memory_data = [[m.peak_mem_mb for m in runs[tool]] for tool in TOOL_ORDER]
+    try:
+        ax.boxplot(memory_data, tick_labels=labels, **boxplot_kwargs)
+    except TypeError:
+        ax.boxplot(memory_data, labels=labels, **boxplot_kwargs)
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("Peak Memory per Run (MB)")
+    ax.set_title(f"RMSF Peak Memory Distribution ({DATASET_LABEL})")
+    ax.grid(axis="y", alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(output_dir / "memory_distribution.png", bbox_inches="tight")
+    plt.close(fig)
+
     loc_calc = [summary[tool]["loc"]["calc"] for tool in TOOL_ORDER]
     loc_plot = [summary[tool]["loc"]["plot"] for tool in TOOL_ORDER]
     fig, ax = plt.subplots(figsize=(8, 5))
-    calc_bars = ax.bar(bar_positions, loc_calc, color="#4472C4", label="Calculation")
-    plot_bars = ax.bar(bar_positions, loc_plot, bottom=loc_calc, color="#ED7D31", label="Plotting")
+    bar_width = 0.6
+    for idx, tool in enumerate(TOOL_ORDER):
+        calc_height = loc_calc[idx]
+        plot_height = loc_plot[idx]
+        ax.bar(
+            bar_positions[idx],
+            calc_height,
+            width=bar_width,
+            color=primary_colors[idx],
+        )
+        ax.bar(
+            bar_positions[idx],
+            plot_height,
+            width=bar_width,
+            bottom=calc_height,
+            color=secondary_colors[idx],
+        )
     ax.set_xticks(bar_positions)
-    ax.set_xticklabels(labels, rotation=20)
+    ax.set_xticklabels(labels)
     ax.set_ylabel("Non-comment Lines")
     ax.set_title("RMSF Reference Snippet Size")
     ax.grid(axis="y", alpha=0.3)
-    ax.legend()
-    for idx, bar in enumerate(plot_bars):
-        total = loc_calc[idx] + loc_plot[idx]
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            total + 0.1,
-            f"{total}",
-            ha="center",
-            va="bottom",
-        )
+    legend_handles = [
+        Patch(facecolor=primary_colors[0], label="Calculation"),
+        Patch(facecolor=secondary_colors[0], label="Plotting"),
+    ]
+    ax.legend(handles=legend_handles)
     fig.tight_layout()
     fig.savefig(output_dir / "loc_summary.png", bbox_inches="tight")
     plt.close(fig)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Run RMSF benchmark across supported toolkits.")
+    available_datasets = sorted({name.lower() for name in list_datasets()})
+    parser.add_argument(
+        "--dataset",
+        default=DATASET_SLUG,
+        type=str.lower,
+        choices=available_datasets,
+        help="Dataset identifier to benchmark.",
+    )
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=REPEATS,
+        help="Number of benchmark repetitions to run.",
+    )
+    parser.add_argument(
+        "--timing-only",
+        action="store_true",
+        help="Skip artifact generation and only capture timing.",
+    )
+    parser.add_argument(
+        "--no-plot",
+        action="store_true",
+        help="Disable plot generation for individual runs.",
+    )
+    args = parser.parse_args(argv)
+
+    _set_dataset(args.dataset)
+
+    repeats = max(1, args.repeats)
+    timing_only = args.timing_only
+    do_plot = not args.no_plot
+
     mdtraj_traj = md.load(str(TRAJ_FILE), top=str(TOPOLOGY_FILE))
     fast_traj = mdtraj_traj
     universe = mda.Universe(str(TOPOLOGY_FILE), str(TRAJ_FILE))
@@ -282,20 +665,47 @@ def main() -> None:
         "mdanalysis": [],
     }
 
-    for idx in range(1, REPEATS + 1):
+    for idx in range(1, repeats + 1):
         fast_dir = OUTPUT_ROOT / "fastmdanalysis" / f"rep_{idx:02d}"
         fast_dir.mkdir(parents=True, exist_ok=True)
-        _, fast_metrics = _measure_execution("fastmdanalysis", lambda: _run_fastmdanalysis(fast_traj, fast_dir))
+        _, fast_metrics = _measure_tool(
+            "fastmdanalysis",
+            lambda rep_dir=fast_dir: _run_fastmdanalysis(
+                fast_traj,
+                rep_dir,
+                DATASET_LABEL,
+                timing_only=timing_only,
+                do_plot=do_plot,
+            ),
+        )
         results["fastmdanalysis"].append(fast_metrics)
 
         mdtraj_dir = OUTPUT_ROOT / "mdtraj" / f"rep_{idx:02d}"
         mdtraj_dir.mkdir(parents=True, exist_ok=True)
-        _, mdtraj_metrics = _measure_execution("mdtraj", lambda: _run_mdtraj(mdtraj_traj, mdtraj_dir))
+        _, mdtraj_metrics = _measure_tool(
+            "mdtraj",
+            lambda rep_dir=mdtraj_dir: _run_mdtraj(
+                mdtraj_traj,
+                rep_dir,
+                DATASET_LABEL,
+                timing_only=timing_only,
+                do_plot=do_plot,
+            ),
+        )
         results["mdtraj"].append(mdtraj_metrics)
 
         mda_dir = OUTPUT_ROOT / "mdanalysis" / f"rep_{idx:02d}"
         mda_dir.mkdir(parents=True, exist_ok=True)
-        _, mda_metrics = _measure_execution("mdanalysis", lambda: _run_mdanalysis(universe, mda_dir))
+        _, mda_metrics = _measure_tool(
+            "mdanalysis",
+            lambda rep_dir=mda_dir: _run_mdanalysis(
+                universe,
+                rep_dir,
+                DATASET_LABEL,
+                timing_only=timing_only,
+                do_plot=do_plot,
+            ),
+        )
         results["mdanalysis"].append(mda_metrics)
 
     summary = {tool: _summarize(metrics) for tool, metrics in results.items()}
@@ -311,24 +721,16 @@ def main() -> None:
         writer = csv.writer(f)
         writer.writerow(["tool", "metric", "mean", "stdev", "min", "max"])
         for tool in TOOL_ORDER:
-            elapsed = summary[tool]["elapsed_s"]
-            writer.writerow([
-                tool,
-                "elapsed_s",
-                f"{elapsed['mean']:.6f}",
-                f"{elapsed['stdev']:.6f}",
-                f"{elapsed['min']:.6f}",
-                f"{elapsed['max']:.6f}",
-            ])
-            memory = summary[tool]["peak_mem_mb"]
-            writer.writerow([
-                tool,
-                "peak_mem_mb",
-                f"{memory['mean']:.6f}",
-                f"{memory['stdev']:.6f}",
-                f"{memory['min']:.6f}",
-                f"{memory['max']:.6f}",
-            ])
+            for metric_name in ("elapsed_s", "total_s", "calc_mem_mb", "plot_mem_mb", "peak_mem_mb"):
+                stats = summary[tool][metric_name]
+                writer.writerow([
+                    tool,
+                    metric_name,
+                    f"{stats['mean']:.6f}",
+                    f"{stats['stdev']:.6f}",
+                    f"{stats['min']:.6f}",
+                    f"{stats['max']:.6f}",
+                ])
             loc = summary[tool]["loc"]
             writer.writerow([
                 tool,
@@ -355,16 +757,51 @@ def main() -> None:
                 loc["total"],
             ])
 
+    breakdown_summary_path = OUTPUT_ROOT / "metrics_summary_breakdown.csv"
+    with breakdown_summary_path.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["tool", "metric", "mean", "stdev", "min", "max"])
+        for tool in TOOL_ORDER:
+            for metric_name in ("calc_s", "plot_s", "total_s", "calc_mem_mb", "plot_mem_mb"):
+                stats = summary[tool][metric_name]
+                writer.writerow([
+                    tool,
+                    metric_name,
+                    f"{stats['mean']:.6f}",
+                    f"{stats['stdev']:.6f}",
+                    f"{stats['min']:.6f}",
+                    f"{stats['max']:.6f}",
+                ])
+
     runs_csv_path = OUTPUT_ROOT / "metrics_runs.csv"
     with runs_csv_path.open("w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["tool", "repeat", "elapsed_s", "peak_mem_mb"])
+        writer.writerow(["tool", "repeat", "elapsed_s", "calc_mem_mb", "plot_mem_mb", "peak_mem_mb"])
         for tool in TOOL_ORDER:
             for idx, metrics in enumerate(results[tool], start=1):
                 writer.writerow([
                     tool,
                     idx,
                     f"{metrics.elapsed_s:.6f}",
+                    f"{metrics.calc_mem_mb:.6f}",
+                    f"{metrics.plot_mem_mb:.6f}",
+                    f"{metrics.peak_mem_mb:.6f}",
+                ])
+
+    breakdown_runs_path = OUTPUT_ROOT / "metrics_runs_breakdown.csv"
+    with breakdown_runs_path.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["tool", "repeat", "calc_s", "plot_s", "total_s", "calc_mem_mb", "plot_mem_mb", "peak_mem_mb"])
+        for tool in TOOL_ORDER:
+            for idx, metrics in enumerate(results[tool], start=1):
+                writer.writerow([
+                    tool,
+                    idx,
+                    f"{metrics.calc_s:.6f}",
+                    f"{metrics.plot_s:.6f}",
+                    f"{metrics.total_s:.6f}",
+                    f"{metrics.calc_mem_mb:.6f}",
+                    f"{metrics.plot_mem_mb:.6f}",
                     f"{metrics.peak_mem_mb:.6f}",
                 ])
 
@@ -372,12 +809,21 @@ def main() -> None:
         "metadata": {
             "trajectory": str(TRAJ_FILE),
             "topology": str(TOPOLOGY_FILE),
-            "repeats": REPEATS,
+            "dataset": DATASET_SLUG,
+            "dataset_label": DATASET_LABEL,
+            "repeats": repeats,
             "atom_selection": ATOM_SELECTION,
         },
         "summary": summary,
         "runs": {
-            tool: [m.__dict__ for m in metrics] for tool, metrics in results.items()
+            tool: [
+                {
+                    **asdict(m),
+                    "elapsed_s": m.elapsed_s,
+                }
+                for m in metrics
+            ]
+            for tool, metrics in results.items()
         },
         "instrumentation": INSTRUMENT.to_dict(),
     }

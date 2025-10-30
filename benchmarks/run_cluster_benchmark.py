@@ -596,7 +596,7 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
         ax.errorbar(
             bar_positions,
             total_display,
-            yerr=total_err_display,
+            yerr=np.asarray(total_err_display, dtype=float),
             fmt="none",
             ecolor="#444444",
             capsize=5,
@@ -631,10 +631,15 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
         full_handles.append(plot_bar_full)
         full_labels.append("Plotting")
     if any(total_full_err):
+        total_full_err_array = np.asarray(total_full_err, dtype=float)
+        stacked_totals = np.asarray(
+            [calc_means[idx] + plot_means[idx] for idx in range(len(calc_means))],
+            dtype=float,
+        )
         ax.errorbar(
             bar_positions,
-            total_full_means,
-            yerr=total_full_err,
+            stacked_totals,
+            yerr=total_full_err_array,
             fmt="none",
             ecolor="#444444",
             capsize=5,
@@ -675,14 +680,11 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
         mem_labels.append("Plotting")
     if any(total_mem_err):
         mem_err_array = np.asarray(total_mem_err, dtype=float)
-        mem_err = np.vstack([
-            np.zeros_like(mem_err_array),
-            mem_err_array,
-        ])
+        symmetric_mem_err = np.vstack([mem_err_array, mem_err_array])
         ax.errorbar(
             bar_positions,
             total_mem_means,
-            yerr=mem_err,
+            yerr=symmetric_mem_err,
             fmt="none",
             ecolor="#444444",
             capsize=5,
@@ -705,17 +707,28 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
     runtime_data = [[m.total_s for m in runs[tool]] for tool in TOOL_ORDER]
     boxplot_kwargs = dict(
         patch_artist=True,
-        boxprops=dict(facecolor="#D9E1F2", color="#2F5597"),
-        medianprops=dict(color="#C00000"),
+        boxprops=dict(facecolor="#D9E1F2", color="#2F5597", linewidth=2.0),
+        medianprops=dict(color="#C00000", linewidth=2.5),
+        whiskerprops=dict(color="#2F5597", linewidth=2.0),
+        capprops=dict(color="#2F5597", linewidth=2.0),
+        flierprops=dict(
+            marker="o",
+            markersize=6,
+            markerfacecolor="#2F5597",
+            markeredgecolor="#2F5597",
+            alpha=0.8,
+        ),
     )
     try:
         ax.boxplot(runtime_data, tick_labels=labels, **boxplot_kwargs)
     except TypeError:
         ax.boxplot(runtime_data, labels=labels, **boxplot_kwargs)
     ax.set_xticklabels(labels)
+    ax.tick_params(axis="both", labelsize=12)
     ax.set_ylabel("Runtime per Run (s)")
     ax.set_title(f"Clustering Runtime Distribution ({DATASET_LABEL})")
     ax.grid(axis="y", alpha=0.3)
+    ax.set_ylim(bottom=0)
     fig.tight_layout()
     fig.savefig(output_dir / "runtime_distribution.png", bbox_inches="tight")
     plt.close(fig)
@@ -727,9 +740,11 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
     except TypeError:
         ax.boxplot(memory_data, labels=labels, **boxplot_kwargs)
     ax.set_xticklabels(labels)
+    ax.tick_params(axis="both", labelsize=12)
     ax.set_ylabel("Peak Memory per Run (MB)")
     ax.set_title(f"Clustering Peak Memory Distribution ({DATASET_LABEL})")
     ax.grid(axis="y", alpha=0.3)
+    ax.set_ylim(bottom=0)
     fig.tight_layout()
     fig.savefig(output_dir / "memory_distribution.png", bbox_inches="tight")
     plt.close(fig)

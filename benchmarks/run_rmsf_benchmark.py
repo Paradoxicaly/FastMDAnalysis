@@ -483,10 +483,15 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
         full_handles.append(plot_bar_full)
         full_labels.append("Plotting")
     if any(total_full_err):
+        total_full_err_array = np.asarray(total_full_err, dtype=float)
+        stacked_totals = np.asarray(
+            [calc_means[idx] + plot_means[idx] for idx in range(len(calc_means))],
+            dtype=float,
+        )
         ax.errorbar(
             bar_positions,
-            total_full_means,
-            yerr=total_full_err,
+            stacked_totals,
+            yerr=total_full_err_array,
             fmt="none",
             ecolor="#444444",
             capsize=5,
@@ -507,7 +512,7 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
     calc_mem_means = [summary[tool]["calc_mem_mb"]["mean"] for tool in TOOL_ORDER]
     plot_mem_means = [summary[tool]["plot_mem_mb"]["mean"] for tool in TOOL_ORDER]
     mem_totals = [summary[tool]["peak_mem_mb"]["mean"] for tool in TOOL_ORDER]
-    mem_err_values = [summary[tool]["peak_mem_mb"]["stdev"] for tool in TOOL_ORDER]
+    total_mem_err = [summary[tool]["peak_mem_mb"]["stdev"] for tool in TOOL_ORDER]
     plot_mem_display = [max(total - calc, 0.0) for calc, total in zip(calc_mem_means, mem_totals)]
     fig, ax = plt.subplots(figsize=(8, 5))
     calc_mem_bars = ax.bar(bar_positions, calc_mem_means, color=primary_colors, label="Computation")
@@ -525,16 +530,12 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
         )
         mem_handles.append(plot_mem_bars)
         mem_labels.append("Plotting")
-    if any(mem_err_values):
-        mem_err_array = np.asarray(mem_err_values, dtype=float)
-        mem_err = np.vstack([
-            np.zeros_like(mem_err_array),
-            mem_err_array,
-        ])
+    if any(total_mem_err):
+        mem_err_array = np.asarray(total_mem_err, dtype=float)
         ax.errorbar(
             bar_positions,
             mem_totals,
-            yerr=mem_err,
+            yerr=mem_err_array,
             fmt="none",
             ecolor="#444444",
             capsize=5,
@@ -546,7 +547,7 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
     ax.grid(axis="y", alpha=0.3)
     if len(mem_handles) > 1:
         ax.legend(mem_handles, mem_labels)
-    ax.set_ylim(0, _headroom(mem_totals, mem_err_values))
+    ax.set_ylim(0, _headroom(mem_totals, total_mem_err))
     target_bars = plot_mem_bars if has_plot_mem and plot_mem_bars is not None else calc_mem_bars
     _annotate_small_mem(ax, target_bars, mem_totals)
     fig.tight_layout()
@@ -557,17 +558,28 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
     runtime_data = [[m.total_s for m in runs[tool]] for tool in TOOL_ORDER]
     boxplot_kwargs = dict(
         patch_artist=True,
-        boxprops=dict(facecolor="#D9E1F2", color="#2F5597"),
-        medianprops=dict(color="#C00000"),
+        boxprops=dict(facecolor="#D9E1F2", color="#2F5597", linewidth=2.0),
+        medianprops=dict(color="#C00000", linewidth=2.5),
+        whiskerprops=dict(color="#2F5597", linewidth=2.0),
+        capprops=dict(color="#2F5597", linewidth=2.0),
+        flierprops=dict(
+            marker="o",
+            markersize=6,
+            markerfacecolor="#2F5597",
+            markeredgecolor="#2F5597",
+            alpha=0.8,
+        ),
     )
     try:
         ax.boxplot(runtime_data, tick_labels=labels, **boxplot_kwargs)
     except TypeError:
         ax.boxplot(runtime_data, labels=labels, **boxplot_kwargs)
     ax.set_xticklabels(labels)
+    ax.tick_params(axis="both", labelsize=12)
     ax.set_ylabel("Runtime per Run (s)")
     ax.set_title(f"RMSF Runtime Distribution ({DATASET_LABEL})")
     ax.grid(axis="y", alpha=0.3)
+    ax.set_ylim(bottom=0)
     fig.tight_layout()
     fig.savefig(output_dir / "runtime_distribution.png", bbox_inches="tight")
     plt.close(fig)
@@ -579,9 +591,11 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
     except TypeError:
         ax.boxplot(memory_data, labels=labels, **boxplot_kwargs)
     ax.set_xticklabels(labels)
+    ax.tick_params(axis="both", labelsize=12)
     ax.set_ylabel("Peak Memory per Run (MB)")
     ax.set_title(f"RMSF Peak Memory Distribution ({DATASET_LABEL})")
     ax.grid(axis="y", alpha=0.3)
+    ax.set_ylim(bottom=0)
     fig.tight_layout()
     fig.savefig(output_dir / "memory_distribution.png", bbox_inches="tight")
     plt.close(fig)

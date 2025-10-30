@@ -77,6 +77,18 @@ def _overview_charts() -> List[dict[str, object]]:
             "caption": "Human effort split between calculation and plotting code",
             "summary_key": "loc_totals",
         },
+        {
+            "title": "Aggregate runtime footprint",
+            "path": OVERVIEW_DIR / "runtime_totals.png",
+            "caption": "Total computation vs plotting time across benchmarks",
+            "summary_key": "runtime_totals",
+        },
+        {
+            "title": "Aggregate peak memory footprint",
+            "path": OVERVIEW_DIR / "peak_mem_totals.png",
+            "caption": "Peak memory split between computation and plotting helpers",
+            "summary_key": "peak_mem_totals",
+        },
     ]
 
 
@@ -216,6 +228,8 @@ def add_summary_slide(prs: Presentation, summary: dict) -> None:
 
     aggregated = summary.get("aggregated", {})
     loc_totals = summary.get("loc_totals", {})
+    runtime_totals = summary.get("runtime_totals", {})
+    peak_mem_totals = summary.get("peak_mem_totals", {})
 
     def _fmt_tool(name: str) -> str:
         return "FastMDAnalysis" if name == "fastmdanalysis" else name.capitalize()
@@ -234,11 +248,45 @@ def add_summary_slide(prs: Presentation, summary: dict) -> None:
         snippet_para = frame.add_paragraph()
         snippet_para.level = 1
         snippet_para.font.size = Pt(16)
-        chunks = [
-            f"{_fmt_tool(tool)} {values.get('calc', 0)} calc / {values.get('plot', 0)} plot lines"
-            for tool, values in loc_totals.items()
-        ]
+        chunks = []
+        for tool, values in loc_totals.items():
+            calc_lines = values.get("calc", 0)
+            plot_lines = values.get("plot", 0)
+            total_lines = calc_lines + plot_lines
+            chunks.append(
+                f"{_fmt_tool(tool)} {calc_lines} calc / {plot_lines} plot ({total_lines} total) lines"
+            )
         snippet_para.text = "Snippet footprint: " + ", ".join(chunks) + "."
+
+    if runtime_totals:
+        runtime_para = frame.add_paragraph()
+        runtime_para.level = 1
+        runtime_para.font.size = Pt(16)
+        runtime_chunks = []
+        for tool, values in runtime_totals.items():
+            calc_runtime = float(values.get("calc", 0.0))
+            plot_runtime = float(values.get("plot", 0.0))
+            overhead_runtime = float(values.get("overhead", 0.0))
+            total_runtime = float(values.get("total", calc_runtime + plot_runtime + overhead_runtime))
+            parts = f"{_fmt_tool(tool)} {calc_runtime:.2f}s calc / {plot_runtime:.2f}s plot"
+            if overhead_runtime > 1e-3:
+                parts += f" / {overhead_runtime:.2f}s overhead"
+            runtime_chunks.append(f"{parts} ({total_runtime:.2f}s total)")
+        runtime_para.text = "Aggregate runtime: " + ", ".join(runtime_chunks) + "."
+
+    if peak_mem_totals:
+        mem_para = frame.add_paragraph()
+        mem_para.level = 1
+        mem_para.font.size = Pt(16)
+        mem_chunks = []
+        for tool, values in peak_mem_totals.items():
+            calc_mem = float(values.get("calc", 0.0))
+            plot_mem = float(values.get("plot", 0.0))
+            total_mem = float(values.get("total", calc_mem + plot_mem))
+            mem_chunks.append(
+                f"{_fmt_tool(tool)} {calc_mem:.2f} MB calc / {plot_mem:.2f} MB plot ({total_mem:.2f} MB peak)"
+            )
+        mem_para.text = "Aggregate peak memory: " + ", ".join(mem_chunks) + "."
 
     closing = frame.add_paragraph()
     closing.level = 1
@@ -341,11 +389,40 @@ def build_presentation(output_path: Path) -> None:
                 )
             loc_totals = summary.get("loc_totals", {})
             if loc_totals:
-                footprint = ", ".join(
-                    f"{_fmt_tool(tool)} {vals.get('calc', 0)} calc / {vals.get('plot', 0)} plot lines"
-                    for tool, vals in loc_totals.items()
-                )
+                footprint_chunks = []
+                for tool, vals in loc_totals.items():
+                    calc_lines = vals.get("calc", 0)
+                    plot_lines = vals.get("plot", 0)
+                    total_lines = calc_lines + plot_lines
+                    footprint_chunks.append(
+                        f"{_fmt_tool(tool)} {calc_lines} calc / {plot_lines} plot ({total_lines} total) lines"
+                    )
+                footprint = ", ".join(footprint_chunks)
                 instrumentation_notes.append(f"Snippet footprint: {footprint}")
+            runtime_totals = summary.get("runtime_totals", {})
+            if runtime_totals:
+                runtime_chunks = []
+                for tool, values in runtime_totals.items():
+                    calc_runtime = float(values.get("calc", 0.0))
+                    plot_runtime = float(values.get("plot", 0.0))
+                    overhead_runtime = float(values.get("overhead", 0.0))
+                    total_runtime = float(values.get("total", calc_runtime + plot_runtime + overhead_runtime))
+                    parts = f"{_fmt_tool(tool)} {calc_runtime:.2f}s calc / {plot_runtime:.2f}s plot"
+                    if overhead_runtime > 1e-3:
+                        parts += f" / {overhead_runtime:.2f}s overhead"
+                    runtime_chunks.append(f"{parts} ({total_runtime:.2f}s total)")
+                instrumentation_notes.append("Aggregate runtime: " + ", ".join(runtime_chunks))
+            peak_mem_totals = summary.get("peak_mem_totals", {})
+            if peak_mem_totals:
+                mem_chunks = []
+                for tool, values in peak_mem_totals.items():
+                    calc_mem = float(values.get("calc", 0.0))
+                    plot_mem = float(values.get("plot", 0.0))
+                    total_mem = float(values.get("total", calc_mem + plot_mem))
+                    mem_chunks.append(
+                        f"{_fmt_tool(tool)} {calc_mem:.2f} MB calc / {plot_mem:.2f} MB plot ({total_mem:.2f} MB peak)"
+                    )
+                instrumentation_notes.append("Aggregate peak memory: " + ", ".join(mem_chunks))
         if INSTRUMENTATION_CHART.exists():
             add_chart_slide(
                 prs,
@@ -395,9 +472,43 @@ def build_presentation(output_path: Path) -> None:
                 for tool in tools or []:
                     values = loc_totals.get(tool, {})
                     if values:
+                        calc_lines = values.get("calc", 0)
+                        plot_lines = values.get("plot", 0)
+                        total_lines = calc_lines + plot_lines
                         notes.append(
-                            f"{_fmt_tool(tool)}: {values.get('calc', 0)} calc lines, {values.get('plot', 0)} plotting lines"
+                            f"{_fmt_tool(tool)}: {calc_lines} calc lines, {plot_lines} plotting lines, {total_lines} total lines"
                         )
+        elif summary_key == "runtime_totals" and summary:
+            runtime_totals = summary.get("runtime_totals", {})
+            if runtime_totals:
+                notes = notes or []
+                for tool in tools or []:
+                    values = runtime_totals.get(tool, {})
+                    if not values:
+                        continue
+                    calc_runtime = float(values.get("calc", 0.0))
+                    plot_runtime = float(values.get("plot", 0.0))
+                    overhead_runtime = float(values.get("overhead", 0.0))
+                    total_runtime = float(values.get("total", calc_runtime + plot_runtime + overhead_runtime))
+                    parts = f"{_fmt_tool(tool)}: {calc_runtime:.2f}s calc, {plot_runtime:.2f}s plot"
+                    if overhead_runtime > 1e-3:
+                        parts += f", {overhead_runtime:.2f}s overhead"
+                    parts += f" ({total_runtime:.2f}s total)"
+                    notes.append(parts)
+        elif summary_key == "peak_mem_totals" and summary:
+            peak_mem_totals = summary.get("peak_mem_totals", {})
+            if peak_mem_totals:
+                notes = notes or []
+                for tool in tools or []:
+                    values = peak_mem_totals.get(tool, {})
+                    if not values:
+                        continue
+                    calc_mem = float(values.get("calc", 0.0))
+                    plot_mem = float(values.get("plot", 0.0))
+                    total_mem = float(values.get("total", calc_mem + plot_mem))
+                    notes.append(
+                        f"{_fmt_tool(tool)}: {calc_mem:.2f} MB calc, {plot_mem:.2f} MB plot ({total_mem:.2f} MB peak)"
+                    )
 
         add_chart_slide(
             prs,

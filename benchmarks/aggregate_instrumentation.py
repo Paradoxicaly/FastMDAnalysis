@@ -207,6 +207,14 @@ def main(argv: list[str] | None = None) -> None:
     successes: Dict[str, int] = defaultdict(int)
     exceptions: Dict[str, int] = defaultdict(int)
     loc_totals: Dict[str, Dict[str, int]] = {tool: {"calc": 0, "plot": 0} for tool in TOOLS}
+    runtime_totals: Dict[str, Dict[str, float]] = {
+        tool: {"calc": 0.0, "plot": 0.0, "overhead": 0.0, "total": 0.0}
+        for tool in TOOLS
+    }
+    peak_mem_totals: Dict[str, Dict[str, float]] = {
+        tool: {"calc": 0.0, "plot": 0.0, "total": 0.0}
+        for tool in TOOLS
+    }
 
     for benchmark, bench_dir in BENCHMARK_DIRS.items():
         touchpoints = _load_touchpoints(bench_dir / "touchpoints.json")
@@ -238,6 +246,22 @@ def main(argv: list[str] | None = None) -> None:
             loc_totals[tool]["calc"] += int(loc.get("calc", 0))
             loc_totals[tool]["plot"] += int(loc.get("plot", 0))
 
+            calc_runtime = float(summary.get("calc_s", {}).get("mean", 0.0))
+            plot_runtime = float(summary.get("plot_s", {}).get("mean", 0.0))
+            total_runtime = float(summary.get("total_s", {}).get("mean", calc_runtime + plot_runtime))
+            overhead_runtime = max(total_runtime - calc_runtime - plot_runtime, 0.0)
+            runtime_totals[tool]["calc"] += calc_runtime
+            runtime_totals[tool]["plot"] += plot_runtime
+            runtime_totals[tool]["overhead"] += overhead_runtime
+            runtime_totals[tool]["total"] += total_runtime
+
+            calc_mem = float(summary.get("calc_mem_mb", {}).get("mean", 0.0))
+            peak_mem = float(summary.get("peak_mem_mb", {}).get("mean", calc_mem))
+            plot_mem = max(peak_mem - calc_mem, 0.0)
+            peak_mem_totals[tool]["calc"] += calc_mem
+            peak_mem_totals[tool]["plot"] += plot_mem
+            peak_mem_totals[tool]["total"] += peak_mem
+
         per_benchmark[benchmark] = benchmark_entry
 
     aggregated_summary = {
@@ -263,6 +287,8 @@ def main(argv: list[str] | None = None) -> None:
         "per_benchmark": per_benchmark,
         "aggregated": aggregated_summary,
         "loc_totals": loc_totals,
+        "runtime_totals": runtime_totals,
+        "peak_mem_totals": peak_mem_totals,
         "aggregated_details": aggregated_details,
         "metadata": {
             "benchmarks": list(BENCHMARK_DIRS.keys()),
@@ -371,6 +397,47 @@ def main(argv: list[str] | None = None) -> None:
             "Calculation": colors_for(TOOLS, variant="primary"),
             "Plotting": colors_for(TOOLS, variant="secondary"),
         },
+    )
+
+    runtime_values = {
+        "Computation": [runtime_totals[tool]["calc"] for tool in TOOLS],
+        "Plotting": [runtime_totals[tool]["plot"] for tool in TOOLS],
+    }
+    runtime_colors = {
+        "Computation": colors_for(TOOLS, variant="primary"),
+        "Plotting": colors_for(TOOLS, variant="secondary"),
+    }
+    if any(runtime_totals[tool]["overhead"] > 1e-6 for tool in TOOLS):
+        runtime_values["Overhead"] = [runtime_totals[tool]["overhead"] for tool in TOOLS]
+        runtime_colors["Overhead"] = ["#7F7F7F"] * len(TOOLS)
+    _render_bar_chart(
+        title="Aggregate runtime footprint",
+        ylabel="Seconds",
+        labels=agg_labels,
+        values=runtime_values,
+        filename="runtime_totals.png",
+        legend_title="Component",
+        stacked=True,
+        series_colors=runtime_colors,
+    )
+
+    peak_mem_values = {
+        "Computation": [peak_mem_totals[tool]["calc"] for tool in TOOLS],
+        "Plotting": [peak_mem_totals[tool]["plot"] for tool in TOOLS],
+    }
+    peak_mem_colors = {
+        "Computation": colors_for(TOOLS, variant="primary"),
+        "Plotting": colors_for(TOOLS, variant="secondary"),
+    }
+    _render_bar_chart(
+        title="Aggregate peak memory footprint",
+        ylabel="Megabytes",
+        labels=agg_labels,
+        values=peak_mem_values,
+        filename="peak_mem_totals.png",
+        legend_title="Component",
+        stacked=True,
+        series_colors=peak_mem_colors,
     )
 
     print(f"Wrote instrumentation overview to {summary_path}")

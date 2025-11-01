@@ -4,15 +4,76 @@ import argparse
 import json
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, Iterable
+from typing import Dict, Iterable, Tuple
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib import colors as mcolors
+from matplotlib.patches import Patch
 import numpy as np
 
 from dataset_config import get_dataset_config, list_datasets
 from palette import color_for, colors_for, label_for_tool
+
+AXIS_LABEL_SIZE = 18
+TICK_LABEL_SIZE = 16
+TITLE_FONT_SIZE = 20
+LEGEND_FONT_SIZE = 15
+plt.rcParams.update({
+    "axes.labelsize": AXIS_LABEL_SIZE,
+    "axes.titlesize": TITLE_FONT_SIZE,
+    "figure.titlesize": TITLE_FONT_SIZE,
+    "legend.fontsize": LEGEND_FONT_SIZE,
+    "xtick.labelsize": TICK_LABEL_SIZE,
+    "ytick.labelsize": TICK_LABEL_SIZE,
+})
+
+
+LINE_WIDTH = 0.8
+
+
+def _normalize_hex(hex_color: str) -> str:
+    if not hex_color:
+        return "000000"
+    hex_color = hex_color.strip()
+    if hex_color.startswith("#"):
+        hex_color = hex_color[1:]
+    if len(hex_color) == 3:
+        hex_color = "".join(ch * 2 for ch in hex_color)
+    if len(hex_color) != 6:
+        return "000000"
+    return hex_color.upper()
+
+
+def _lighten_hex(hex_color: str, amount: float = 0.35) -> str:
+    """Return a lighter variant of the given hex color.
+
+    amount is between 0 and 1; higher amounts move the colour towards white.
+    """
+    base = _normalize_hex(hex_color)
+    r = int(base[0:2], 16)
+    g = int(base[2:4], 16)
+    b = int(base[4:6], 16)
+    r = int(r + (255 - r) * amount)
+    g = int(g + (255 - g) * amount)
+    b = int(b + (255 - b) * amount)
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def _darken_hex(hex_color: str, amount: float = 0.2) -> str:
+    """Return a darker variant of the given hex color.
+
+    amount is between 0 and 1; higher amounts move the colour towards black.
+    """
+    base = _normalize_hex(hex_color)
+    r = int(base[0:2], 16)
+    g = int(base[2:4], 16)
+    b = int(base[4:6], 16)
+    r = int(r * (1 - amount))
+    g = int(g * (1 - amount))
+    b = int(b * (1 - amount))
+    return f"#{r:02X}{g:02X}{b:02X}"
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RESULTS_ROOT = PROJECT_ROOT / "benchmarks" / "results"
@@ -87,15 +148,65 @@ def _render_bar_chart(
     stacked: bool = False,
     show_labels: bool = False,
     series_colors: Dict[str, list[str]] | None = None,
+    legend_order: list[str] | None = None,
+    figsize: Tuple[float, float] | None = None,
+    overlay_values: list[float] | None = None,
+    overlay_label: str | None = None,
+    overlay_kwargs: Dict[str, object] | None = None,
+    legend_kwargs: Dict[str, object] | None = None,
 ) -> None:
     x = np.arange(len(labels))
-    width = 0.25 if not stacked else 0.5
-    fig, ax = plt.subplots(figsize=(10, 6))
+    # Determine sensible, consistent bar widths so grouped and stacked
+    # charts have a similar visual footprint. Use a fixed group width
+    # (space occupied by the group of bars for a single x tick) and
+    # derive per-series width when not stacked.
+    group_width = 0.8
+    if stacked:
+        # For stacked bars, use the full group width so the stacked bar
+        # occupies the same visual width as a grouped bar group.
+        width = group_width
+    else:
+        # The width per bar depends on how many series we will draw.
+        series_count = len(values) if values else 1
+        width = group_width / max(series_count, 1)
+    fig, ax = plt.subplots(figsize=figsize or (10, 6))
 
     bar_info: list[tuple] = []
     legend_entries: list[tuple] = []
 
     items = list(values.items())
+
+    def _face_rgb(color) -> tuple[float, float, float]:
+        if isinstance(color, (tuple, list, np.ndarray)) and len(color) >= 3:
+            return tuple(float(component) for component in color[:3])
+        try:
+            return mcolors.to_rgb(color)
+        except Exception:
+            return (0.4, 0.4, 0.4)
+
+    def _edge_from_face(color) -> tuple[float, float, float, float]:
+        base = _face_rgb(color)
+        edged = tuple(min(1.0, component * 0.7) for component in base)
+        return (*edged, 1.0)
+
+    def _stylize_container(container, series_name: str) -> None:
+        if container is None:
+            return
+        name_lower = series_name.lower()
+        for bar in container:
+            face = bar.get_facecolor()
+            edge_color = _edge_from_face(face)
+            bar.set_edgecolor(edge_color)
+            bar.set_linewidth(LINE_WIDTH)
+            if name_lower in ("plotting", "plot"):
+                bar.set_hatch("//")
+                bar.set_alpha(0.65)
+            elif name_lower in ("computation", "calc", "calculation"):
+                bar.set_hatch(None)
+                bar.set_alpha(0.9)
+            else:
+                bar.set_hatch(None)
+                bar.set_alpha(0.95)
 
     if stacked:
         bottom = np.zeros(len(labels))
@@ -105,27 +216,42 @@ def _render_bar_chart(
             if series_colors and series_name in series_colors:
                 color = series_colors[series_name]
             container = ax.bar(x, series_values, width=width, bottom=bottom, label=series_name, color=color)
+            _stylize_container(container, series_name)
             bar_info.append((container, baseline))
             bottom += np.array(series_values)
             legend_entries.append((container, series_name, any(abs(val) > 1e-9 for val in series_values)))
     else:
         series_count = len(items)
-        offsets = [0.0] if series_count == 1 else np.linspace(-width, width, series_count)
+        # Compute offsets so the group of bars is centered at each x and spans
+        # approximately `group_width`. Place each bar so bars don't overlap and
+        # have equal width computed above.
+        if series_count == 1:
+            offsets = [0.0]
+        else:
+            first = -group_width / 2 + width / 2
+            last = group_width / 2 - width / 2
+            offsets = np.linspace(first, last, series_count)
         for offset, (series_name, series_values) in zip(offsets, items):
             color = None
             if series_colors and series_name in series_colors:
                 color = series_colors[series_name]
+            # Slightly reduce plotting bar width so hatched plotting segments
+            # visually match the calculation segments.
             container = ax.bar(x + offset, series_values, width=width, label=series_name, color=color)
+            _stylize_container(container, series_name)
             bar_info.append((container, None))
             legend_entries.append((container, series_name, any(abs(val) > 1e-9 for val in series_values)))
 
     ax.set_title(title)
+    # Use default tick placement (no manual x-limits) so groups are evenly spaced.
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.set_ylabel(ylabel)
     ax.grid(axis="y", alpha=0.3)
 
     active_entries = [(container, name) for container, name, active in legend_entries if active]
+    legend_handles: list = []
+    legend_labels: list[str] = []
     should_show_legend = False
     if legend_title is not None:
         should_show_legend = bool(active_entries) or len(legend_entries) > 0
@@ -133,8 +259,80 @@ def _render_bar_chart(
         should_show_legend = True
 
     if should_show_legend:
-        handles, labels_for_legend = zip(*active_entries) if active_entries else zip(*[(legend_entries[0][0], legend_entries[0][1])])
-        legend = ax.legend(handles, labels_for_legend)
+        name_to_container = {name: container for container, name in active_entries}
+        if legend_order:
+            ordered_names = [name for name in legend_order if name in name_to_container]
+        else:
+            ordered_names = [name for _, name in active_entries]
+        ordered_entries = [(name_to_container[name], name) for name in ordered_names if name in name_to_container]
+        if not ordered_entries:
+            ordered_entries = active_entries
+
+        handles: list[Patch] = []
+        labels_for_legend: list[str] = []
+
+        for container, name in ordered_entries:
+            color_spec = None
+            if series_colors and name in series_colors:
+                color_spec = series_colors[name]
+                if isinstance(color_spec, (list, tuple)) and color_spec:
+                    color_spec = color_spec[0]
+            if color_spec is None:
+                try:
+                    sample = container[0]
+                except Exception:
+                    sample = container
+                try:
+                    face = sample.get_facecolor()
+                    if isinstance(face, np.ndarray):
+                        color_spec = tuple(face.tolist())
+                    else:
+                        color_spec = face
+                except Exception:
+                    try:
+                        color_spec = sample.get_color()
+                    except Exception:
+                        color_spec = "#7F7F7F"
+
+            if isinstance(color_spec, list):
+                color_spec = tuple(color_spec)
+
+            edge_color = _edge_from_face(color_spec)
+
+            name_lower = name.lower()
+            if name_lower in ("plotting", "plot"):
+                patch = Patch(facecolor=color_spec, edgecolor=edge_color, hatch="//", linewidth=LINE_WIDTH, label=name)
+                patch.set_alpha(0.65)
+            elif name_lower in ("computation", "calc", "calculation"):
+                patch = Patch(facecolor=color_spec, edgecolor=edge_color, linewidth=LINE_WIDTH, label=name)
+                patch.set_alpha(0.9)
+            else:
+                patch = Patch(facecolor=color_spec, edgecolor=edge_color, linewidth=LINE_WIDTH, label=name)
+                patch.set_alpha(0.95)
+
+            handles.append(patch)
+            labels_for_legend.append(name)
+
+        legend_handles = handles
+        legend_labels = labels_for_legend
+
+    if overlay_values is not None:
+        style = {
+            "linestyle": "",
+            "marker": "D",
+            "color": "#333333",
+            "markersize": 6,
+            "zorder": 5,
+        }
+        if overlay_kwargs:
+            style.update(overlay_kwargs)
+        overlay_line, = ax.plot(x, overlay_values, **style)
+        legend_handles.append(overlay_line)
+        legend_labels.append(overlay_label or "Measured peak")
+        should_show_legend = True
+
+    if legend_handles and should_show_legend:
+        legend = ax.legend(legend_handles, legend_labels, **(legend_kwargs or {}))
         if legend_title:
             legend.set_title(legend_title)
 
@@ -256,8 +454,8 @@ def main(argv: list[str] | None = None) -> None:
             runtime_totals[tool]["total"] += total_runtime
 
             calc_mem = float(summary.get("calc_mem_mb", {}).get("mean", 0.0))
-            peak_mem = float(summary.get("peak_mem_mb", {}).get("mean", calc_mem))
-            plot_mem = max(peak_mem - calc_mem, 0.0)
+            plot_mem = float(summary.get("plot_mem_mb", {}).get("mean", 0.0))
+            peak_mem = float(summary.get("peak_mem_mb", {}).get("mean", max(calc_mem, plot_mem)))
             peak_mem_totals[tool]["calc"] += calc_mem
             peak_mem_totals[tool]["plot"] += plot_mem
             peak_mem_totals[tool]["total"] += peak_mem
@@ -347,6 +545,7 @@ def main(argv: list[str] | None = None) -> None:
         legend_title="Tool",
         show_labels=True,
         series_colors=series_colors_overview,
+        figsize=(7.5, 4.8),
     )
 
     for benchmark, entry in per_benchmark.items():
@@ -367,6 +566,7 @@ def main(argv: list[str] | None = None) -> None:
             legend_title="Tool",
             show_labels=True,
             series_colors=local_colors,
+            figsize=(7.5, 4.8),
         )
 
     _render_bar_chart(
@@ -379,6 +579,7 @@ def main(argv: list[str] | None = None) -> None:
         series_colors={
             "External": colors_for(TOOLS, variant="primary"),
         },
+        figsize=(8.0, 5.0),
     )
 
     loc_values = {
@@ -397,19 +598,25 @@ def main(argv: list[str] | None = None) -> None:
             "Calculation": colors_for(TOOLS, variant="primary"),
             "Plotting": colors_for(TOOLS, variant="secondary"),
         },
+        legend_order=["Plotting", "Calculation"],
+        figsize=(8.0, 5.0),
+        legend_kwargs={"loc": "upper right"},
     )
 
+    has_overhead = any(runtime_totals[tool]["overhead"] > 1e-6 for tool in TOOLS)
+    comp_colors = colors_for(TOOLS, variant="primary")
+    plot_colors = [_lighten_hex(color, 0.55) for color in comp_colors]
     runtime_values = {
         "Computation": [runtime_totals[tool]["calc"] for tool in TOOLS],
         "Plotting": [runtime_totals[tool]["plot"] for tool in TOOLS],
     }
     runtime_colors = {
-        "Computation": colors_for(TOOLS, variant="primary"),
-        "Plotting": colors_for(TOOLS, variant="secondary"),
+        "Computation": comp_colors,
+        "Plotting": plot_colors,
     }
-    if any(runtime_totals[tool]["overhead"] > 1e-6 for tool in TOOLS):
+    if has_overhead:
         runtime_values["Overhead"] = [runtime_totals[tool]["overhead"] for tool in TOOLS]
-        runtime_colors["Overhead"] = ["#7F7F7F"] * len(TOOLS)
+        runtime_colors["Overhead"] = [_lighten_hex(color, 0.35) for color in comp_colors]
     _render_bar_chart(
         title="Aggregate runtime footprint",
         ylabel="Seconds",
@@ -419,15 +626,19 @@ def main(argv: list[str] | None = None) -> None:
         legend_title="Component",
         stacked=True,
         series_colors=runtime_colors,
+        legend_order=["Overhead", "Plotting", "Computation"] if has_overhead else ["Plotting", "Computation"],
+        figsize=(8.0, 5.0),
+        legend_kwargs={"loc": "upper right"},
     )
 
     peak_mem_values = {
         "Computation": [peak_mem_totals[tool]["calc"] for tool in TOOLS],
         "Plotting": [peak_mem_totals[tool]["plot"] for tool in TOOLS],
     }
+    base_colors = colors_for(TOOLS, variant="primary")
     peak_mem_colors = {
-        "Computation": colors_for(TOOLS, variant="primary"),
-        "Plotting": colors_for(TOOLS, variant="secondary"),
+        "Computation": base_colors,
+        "Plotting": [_lighten_hex(color, 0.55) for color in base_colors],
     }
     _render_bar_chart(
         title="Aggregate peak memory footprint",
@@ -438,6 +649,11 @@ def main(argv: list[str] | None = None) -> None:
         legend_title="Component",
         stacked=True,
         series_colors=peak_mem_colors,
+        legend_order=["Plotting", "Computation"],
+        figsize=(8.0, 5.0),
+        overlay_values=[peak_mem_totals[tool]["total"] for tool in TOOLS],
+        overlay_label="Measured peak",
+        legend_kwargs={"loc": "upper right"},
     )
 
     print(f"Wrote instrumentation overview to {summary_path}")

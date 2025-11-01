@@ -32,6 +32,19 @@ from dataset_config import get_dataset_config, list_datasets
 from instrumentation import Instrumentation
 from palette import colors_for, label_for_tool
 
+AXIS_LABEL_SIZE = 18
+TICK_LABEL_SIZE = 16
+TITLE_FONT_SIZE = 20
+LEGEND_FONT_SIZE = 15
+plt.rcParams.update({
+    "axes.labelsize": AXIS_LABEL_SIZE,
+    "axes.titlesize": TITLE_FONT_SIZE,
+    "figure.titlesize": TITLE_FONT_SIZE,
+    "legend.fontsize": LEGEND_FONT_SIZE,
+    "xtick.labelsize": TICK_LABEL_SIZE,
+    "ytick.labelsize": TICK_LABEL_SIZE,
+})
+
 
 REPEATS = 10
 ATOM_SELECTION = None
@@ -382,16 +395,41 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
                 )
     def _annotate_small_mem(ax, bars, values: list[float], threshold: float = 1.0) -> None:
         for bar, value in zip(bars, values):
-            if value <= threshold:
-                offset = max(0.5, value * 0.1)
+            if value <= threshold and value > 0:
+                offset = max(0.04, min(0.2, value * 0.4))
                 ax.text(
                     bar.get_x() + bar.get_width() / 2,
-                    value + offset,
+                    bar.get_y() + value + offset,
                     f"{value:.2f}",
                     ha="center",
                     va="bottom",
                     fontsize=10,
                 )
+
+    def _edge_color_from_face(bar) -> tuple[float, float, float, float] | str:
+        face = bar.get_facecolor()
+        if isinstance(face, tuple) and len(face) >= 3:
+            rgb = face[:3]
+            adjusted = tuple(min(1.0, component * 0.7) for component in rgb)
+            return (*adjusted, 1.0)
+        return "#666666"
+
+    def _stylize_calc_bars(container) -> None:
+        if container is None:
+            return
+        for bar in container:
+            bar.set_linewidth(0.8)
+            bar.set_edgecolor(_edge_color_from_face(bar))
+            bar.set_alpha(0.9)
+
+    def _stylize_plot_bars(container) -> None:
+        if container is None:
+            return
+        for bar in container:
+            bar.set_hatch("//")
+            bar.set_edgecolor(_edge_color_from_face(bar))
+            bar.set_linewidth(0.8)
+            bar.set_alpha(0.65)
 
     calc_means = [summary[tool]["calc_s"]["mean"] for tool in TOOL_ORDER]
     plot_means = [summary[tool]["plot_s"]["mean"] for tool in TOOL_ORDER]
@@ -410,7 +448,7 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
     runtime_ylim = max(_headroom(runtime_means, runtime_err), shared_ylim)
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.bar(
+    runtime_bars = ax.bar(
         bar_positions,
         runtime_means,
         yerr=runtime_err,
@@ -418,6 +456,7 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
         color=primary_colors,
         error_kw={"ecolor": "#444444"},
     )
+    _stylize_calc_bars(runtime_bars)
     ax.set_xticks(bar_positions)
     ax.set_xticklabels(labels)
     ax.set_ylabel("Mean Runtime (s)")
@@ -430,8 +469,9 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
 
     fig, ax = plt.subplots(figsize=(8, 5))
     calc_bar_limited = ax.bar(bar_positions, calc_means, color=primary_colors, label="Computation")
-    limited_handles = [calc_bar_limited]
-    limited_labels = ["Computation"]
+    _stylize_calc_bars(calc_bar_limited)
+    legend_handles: list = []
+    legend_labels: list[str] = []
     has_plot_component = any(value > 1e-9 for value in plot_display)
     plot_bar_limited = None
     if has_plot_component:
@@ -442,8 +482,7 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
             color=secondary_colors,
             label="Plotting",
         )
-        limited_handles.append(plot_bar_limited)
-        limited_labels.append("Plotting")
+        _stylize_plot_bars(plot_bar_limited)
     if any(total_err_display):
         ax.errorbar(
             bar_positions,
@@ -458,8 +497,13 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
     ax.set_ylabel("Mean Runtime (s)")
     ax.set_title(f"RMSF Runtime Breakdown ({DATASET_LABEL})")
     ax.grid(axis="y", alpha=0.3)
-    if len(limited_handles) > 1:
-        ax.legend(limited_handles, limited_labels)
+    if plot_bar_limited is not None:
+        legend_handles.append(plot_bar_limited)
+        legend_labels.append("Plotting")
+    legend_handles.append(calc_bar_limited)
+    legend_labels.append("Computation")
+    if len(legend_handles) > 1:
+        ax.legend(legend_handles, legend_labels)
     _apply_yaxis(ax, runtime_ylim)
     _annotate_small(ax, calc_bar_limited, calc_means)
     fig.tight_layout()
@@ -468,8 +512,9 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
 
     fig, ax = plt.subplots(figsize=(8, 5))
     calc_bar_full = ax.bar(bar_positions, calc_means, color=primary_colors, label="Computation")
-    full_handles = [calc_bar_full]
-    full_labels = ["Computation"]
+    _stylize_calc_bars(calc_bar_full)
+    full_handles: list = []
+    full_labels: list[str] = []
     has_plot_full = any(value > 1e-9 for value in plot_means)
     plot_bar_full = None
     if has_plot_full:
@@ -480,8 +525,10 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
             color=secondary_colors,
             label="Plotting",
         )
-        full_handles.append(plot_bar_full)
-        full_labels.append("Plotting")
+        _stylize_plot_bars(plot_bar_full)
+        if plot_bar_full is not None:
+            full_handles.append(plot_bar_full)
+            full_labels.append("Plotting")
     if any(total_full_err):
         total_full_err_array = np.asarray(total_full_err, dtype=float)
         stacked_totals = np.asarray(
@@ -501,6 +548,8 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
     ax.set_ylabel("Mean Runtime (s)")
     ax.set_title(f"RMSF Runtime Breakdown (All Tools) ({DATASET_LABEL})")
     ax.grid(axis="y", alpha=0.3)
+    full_handles.append(calc_bar_full)
+    full_labels.append("Computation")
     if len(full_handles) > 1:
         ax.legend(full_handles, full_labels)
     _apply_yaxis(ax, runtime_ylim)
@@ -513,23 +562,27 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
     plot_mem_means = [summary[tool]["plot_mem_mb"]["mean"] for tool in TOOL_ORDER]
     mem_totals = [summary[tool]["peak_mem_mb"]["mean"] for tool in TOOL_ORDER]
     total_mem_err = [summary[tool]["peak_mem_mb"]["stdev"] for tool in TOOL_ORDER]
-    plot_mem_display = [max(total - calc, 0.0) for calc, total in zip(calc_mem_means, mem_totals)]
+    stacked_mem = [calc + plot for calc, plot in zip(calc_mem_means, plot_mem_means)]
+    display_envelope = [max(stacked, peak) for stacked, peak in zip(stacked_mem, mem_totals)]
     fig, ax = plt.subplots(figsize=(8, 5))
     calc_mem_bars = ax.bar(bar_positions, calc_mem_means, color=primary_colors, label="Computation")
-    mem_handles = [calc_mem_bars]
-    mem_labels = ["Computation"]
-    has_plot_mem = any(value > 1e-9 for value in plot_mem_display)
+    _stylize_calc_bars(calc_mem_bars)
+    mem_handles: list = []
+    mem_labels: list[str] = []
+    has_plot_mem = any(value > 1e-9 for value in plot_mem_means)
     plot_mem_bars = None
     if has_plot_mem:
         plot_mem_bars = ax.bar(
             bar_positions,
-            plot_mem_display,
+            plot_mem_means,
             bottom=calc_mem_means,
             color=secondary_colors,
             label="Plotting",
         )
-        mem_handles.append(plot_mem_bars)
-        mem_labels.append("Plotting")
+        _stylize_plot_bars(plot_mem_bars)
+        if plot_mem_bars is not None:
+            mem_handles.append(plot_mem_bars)
+            mem_labels.append("Plotting")
     if any(total_mem_err):
         mem_err_array = np.asarray(total_mem_err, dtype=float)
         ax.errorbar(
@@ -545,11 +598,25 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
     ax.set_ylabel("Mean Peak Memory (MB)")
     ax.set_title(f"RMSF Peak Memory Breakdown ({DATASET_LABEL})")
     ax.grid(axis="y", alpha=0.3)
+    mem_handles.append(calc_mem_bars)
+    mem_labels.append("Computation")
+    peak_markers = ax.scatter(
+        bar_positions,
+        mem_totals,
+        marker="D",
+        color="#333333",
+        s=36,
+        zorder=5,
+        label="Measured peak",
+    )
+    mem_handles.append(peak_markers)
+    mem_labels.append("Measured peak")
     if len(mem_handles) > 1:
         ax.legend(mem_handles, mem_labels)
-    ax.set_ylim(0, _headroom(mem_totals, total_mem_err))
-    target_bars = plot_mem_bars if has_plot_mem and plot_mem_bars is not None else calc_mem_bars
-    _annotate_small_mem(ax, target_bars, mem_totals)
+    ax.set_ylim(0, _headroom(display_envelope, total_mem_err))
+    _annotate_small_mem(ax, calc_mem_bars, calc_mem_means)
+    if plot_mem_bars is not None:
+        _annotate_small_mem(ax, plot_mem_bars, plot_mem_means)
     fig.tight_layout()
     fig.savefig(output_dir / "memory_summary.png", bbox_inches="tight")
     plt.close(fig)
@@ -575,7 +642,7 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
     except TypeError:
         ax.boxplot(runtime_data, labels=labels, **boxplot_kwargs)
     ax.set_xticklabels(labels)
-    ax.tick_params(axis="both", labelsize=12)
+    ax.tick_params(axis="both", labelsize=TICK_LABEL_SIZE)
     ax.set_ylabel("Runtime per Run (s)")
     ax.set_title(f"RMSF Runtime Distribution ({DATASET_LABEL})")
     ax.grid(axis="y", alpha=0.3)
@@ -591,7 +658,7 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
     except TypeError:
         ax.boxplot(memory_data, labels=labels, **boxplot_kwargs)
     ax.set_xticklabels(labels)
-    ax.tick_params(axis="both", labelsize=12)
+    ax.tick_params(axis="both", labelsize=TICK_LABEL_SIZE)
     ax.set_ylabel("Peak Memory per Run (MB)")
     ax.set_title(f"RMSF Peak Memory Distribution ({DATASET_LABEL})")
     ax.grid(axis="y", alpha=0.3)
@@ -607,27 +674,42 @@ def _plot_summary(summary: dict[str, dict], runs: dict[str, list[RunMetrics]], o
     for idx, tool in enumerate(TOOL_ORDER):
         calc_height = loc_calc[idx]
         plot_height = loc_plot[idx]
-        ax.bar(
+        calc_container = ax.bar(
             bar_positions[idx],
             calc_height,
             width=bar_width,
             color=primary_colors[idx],
         )
-        ax.bar(
+        _stylize_calc_bars(calc_container)
+        plot_container = ax.bar(
             bar_positions[idx],
             plot_height,
             width=bar_width,
             bottom=calc_height,
             color=secondary_colors[idx],
         )
+        _stylize_plot_bars(plot_container)
     ax.set_xticks(bar_positions)
     ax.set_xticklabels(labels)
     ax.set_ylabel("Non-comment Lines")
     ax.set_title("RMSF Reference Snippet Size")
     ax.grid(axis="y", alpha=0.3)
     legend_handles = [
-        Patch(facecolor=primary_colors[0], label="Calculation"),
-        Patch(facecolor=secondary_colors[0], label="Plotting"),
+        Patch(
+            facecolor=secondary_colors[0],
+            edgecolor="#444444",
+            hatch="//",
+            linewidth=0.8,
+            label="Plotting",
+            alpha=0.65,
+        ),
+        Patch(
+            facecolor=primary_colors[0],
+            edgecolor="#444444",
+            linewidth=0.8,
+            label="Calculation",
+            alpha=0.9,
+        ),
     ]
     ax.legend(handles=legend_handles)
     fig.tight_layout()

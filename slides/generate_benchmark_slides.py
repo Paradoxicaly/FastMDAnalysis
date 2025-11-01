@@ -8,6 +8,23 @@ from typing import Iterable, List, Sequence
 
 from pptx import Presentation
 from pptx.util import Inches, Pt
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
+AXIS_LABEL_SIZE = 18
+TICK_LABEL_SIZE = 16
+TITLE_FONT_SIZE = 20
+LEGEND_FONT_SIZE = 15
+plt.rcParams.update({
+    "axes.labelsize": AXIS_LABEL_SIZE,
+    "axes.titlesize": TITLE_FONT_SIZE,
+    "figure.titlesize": TITLE_FONT_SIZE,
+    "legend.fontsize": LEGEND_FONT_SIZE,
+    "xtick.labelsize": TICK_LABEL_SIZE,
+    "ytick.labelsize": TICK_LABEL_SIZE,
+})
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCHMARK_DIR = ROOT / "benchmarks"
@@ -99,6 +116,9 @@ def iter_benchmark_dirs(root: Path, dataset_slug: str) -> Iterable[Path]:
             continue
         if entry.name.startswith("overview"):
             continue
+        # Skip any orchestrator outputs (these can be empty and shouldn't create slides)
+        if entry.name.lower().startswith("orchestrator"):
+            continue
         if entry.name.endswith(suffix):
             yield entry
 
@@ -162,13 +182,8 @@ def add_benchmark_slide(prs: Presentation, benchmark_dir: Path) -> None:
 
         start = slide_index * len(positions)
         group = charts[start:start + len(positions)]
-        for (label, image_path), (left, top) in zip(group, positions):
+        for (_label, image_path), (left, top) in zip(group, positions):
             slide.shapes.add_picture(str(image_path), left, top, width=image_width)
-            caption_box = slide.shapes.add_textbox(left, top - Inches(0.3), image_width, Inches(0.3))
-            caption_frame = caption_box.text_frame
-            caption_frame.text = label
-            caption_frame.paragraphs[0].font.size = Pt(12)
-            caption_frame.paragraphs[0].font.bold = True
 
 
 def add_chart_slide(
@@ -179,6 +194,7 @@ def add_chart_slide(
     notes: Sequence[str] | None = None,
 ) -> None:
     slide = prs.slides.add_slide(prs.slide_layouts[6])
+    # Titles and captions are deliberately omitted so only the plots are visible on the slide.
     if image_path.exists():
         slide.shapes.add_picture(
             str(image_path),
@@ -187,31 +203,16 @@ def add_chart_slide(
             width=Inches(9.0),
         )
 
-    textbox = slide.shapes.add_textbox(Inches(0.5), Inches(0.2), Inches(9.0), Inches(0.7))
-    frame = textbox.text_frame
-    frame.clear()
-    title_run = frame.paragraphs[0].add_run()
-    title_run.text = title
-    title_run.font.bold = True
-    title_run.font.size = Pt(24)
-
-    if caption or notes:
+    if notes:
         caption_box = slide.shapes.add_textbox(Inches(0.5), Inches(6.6), Inches(9.0), Inches(1.6))
         caption_frame = caption_box.text_frame
         caption_frame.clear()
-
-        if caption:
-            first_para = caption_frame.paragraphs[0]
-            first_para.text = caption
-            first_para.font.size = Pt(14)
-            first_para.font.bold = True
-        if notes:
-            for idx, note in enumerate(notes):
-                paragraph = caption_frame.add_paragraph() if (caption or idx) else caption_frame.paragraphs[0]
-                paragraph.text = note
-                paragraph.level = 1 if caption else 0
-                paragraph.font.size = Pt(12)
-                paragraph.font.bold = False
+        for idx, note in enumerate(notes):
+            paragraph = caption_frame.add_paragraph() if idx else caption_frame.paragraphs[0]
+            paragraph.text = note
+            paragraph.level = 0
+            paragraph.font.size = Pt(12)
+            paragraph.font.bold = False
 
 
 def add_summary_slide(prs: Presentation, summary: dict) -> None:
@@ -294,10 +295,88 @@ def add_summary_slide(prs: Presentation, summary: dict) -> None:
     closing.text = "Charts on the following slides illustrate these touchpoint gaps."
 
 
+def add_combined_overview_slide(prs: Presentation, overview_dir: Path) -> None:
+    """Add a single slide containing four overview charts in a 2x2 grid.
+
+    Charts (if present): external_modules.png, loc_totals.png,
+    runtime_totals.png, peak_mem_totals.png
+    """
+    files = [
+        ("External module dependencies", overview_dir / "external_modules.png"),
+        ("Snippet lines of code (calc vs plot)", overview_dir / "loc_totals.png"),
+        ("Aggregate runtime footprint", overview_dir / "runtime_totals.png"),
+        ("Aggregate peak memory footprint", overview_dir / "peak_mem_totals.png"),
+    ]
+    # Only add the slide if at least one of the files exists
+    if not any(p.exists() for _, p in files):
+        return
+
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    title_box = slide.shapes.add_textbox(Inches(0.5), Inches(0.2), Inches(9.0), Inches(0.6))
+    title_frame = title_box.text_frame
+    title_frame.clear()
+    title_run = title_frame.paragraphs[0].add_run()
+    title_run.text = "Overview: Dependencies, LOC, Runtime, Memory"
+    title_run.font.bold = True
+    title_run.font.size = Pt(24)
+
+    positions = [
+        (Inches(0.5), Inches(1.0)),
+        (Inches(5.0), Inches(1.0)),
+        (Inches(0.5), Inches(4.2)),
+        (Inches(5.0), Inches(4.2)),
+    ]
+    image_width = Inches(4.0)
+
+    for (_caption, path), (left, top) in zip(files, positions):
+        if not path.exists():
+            continue
+        slide.shapes.add_picture(str(path), left, top, width=image_width)
+
+
+def add_instrumentation_combined_slide(prs: Presentation, overview_dir: Path) -> None:
+    """Add a single slide containing instrumentation overview, modules/functions per benchmark
+    and the orchestrator LOC advantage chart in a 2x2 grid.
+
+    Files (if present): instrumentation_overview.png, modules_per_benchmark.png,
+    functions_per_benchmark.png, orchestrator_loc_advantage.png
+    """
+    files = [
+        ("Instrumentation overview", overview_dir / "instrumentation_overview.png"),
+        ("Modules touched per benchmark", overview_dir / "modules_per_benchmark.png"),
+        ("Functions touched per benchmark", overview_dir / "functions_per_benchmark.png"),
+        ("Orchestrator LOC advantage", overview_dir / "orchestrator_loc_advantage.png"),
+    ]
+    if not any(p.exists() for _, p in files):
+        return
+
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    title_box = slide.shapes.add_textbox(Inches(0.5), Inches(0.2), Inches(9.0), Inches(0.6))
+    title_frame = title_box.text_frame
+    title_frame.clear()
+    title_run = title_frame.paragraphs[0].add_run()
+    title_run.text = "Instrumentation overview: touchpoints, modules, functions, LOC"
+    title_run.font.bold = True
+    title_run.font.size = Pt(24)
+
+    positions = [
+        (Inches(0.5), Inches(1.0)),
+        (Inches(5.0), Inches(1.0)),
+        (Inches(0.5), Inches(4.2)),
+        (Inches(5.0), Inches(4.2)),
+    ]
+    image_width = Inches(4.0)
+
+    for (_caption, path), (left, top) in zip(files, positions):
+        if not path.exists():
+            continue
+        slide.shapes.add_picture(str(path), left, top, width=image_width)
+
+
 def build_presentation(output_path: Path) -> None:
     prs = Presentation()
     title_slide = prs.slides.add_slide(prs.slide_layouts[0])
-    title_text = "FastMDAnalysis Benchmarks"
+    title_text = "FastMdAnalysis Benchmarks"
     if DATASET_LABEL:
         title_text += f" – {DATASET_LABEL}"
     title_slide.shapes.title.text = title_text
@@ -309,6 +388,23 @@ def build_presentation(output_path: Path) -> None:
     if DATASET_LABEL:
         subtitle_text += f"\nDataset: {DATASET_LABEL}"
     subtitle.text = subtitle_text
+
+    # Add a combined overview slide containing the four aggregate charts
+    # (external modules, LOC totals, runtime totals, peak mem totals).
+    try:
+        add_combined_overview_slide(prs, OVERVIEW_DIR)
+    except Exception:
+        # Non-fatal: if something goes wrong adding the combined slide,
+        # continue building the rest of the presentation.
+        pass
+
+    # Add a combined instrumentation slide containing instrumentation_overview,
+    # modules_per_benchmark, functions_per_benchmark, and orchestrator_loc_advantage
+    try:
+        add_instrumentation_combined_slide(prs, OVERVIEW_DIR)
+    except Exception:
+        # Non-fatal: continue if something fails while adding instrumentation slide
+        pass
 
     benchmark_dirs = list(iter_benchmark_dirs(RESULTS_ROOT, DATASET_SLUG))
     if not benchmark_dirs:
@@ -325,7 +421,13 @@ def build_presentation(output_path: Path) -> None:
     per_benchmark = {}
 
     def _fmt_tool(name: str) -> str:
-        return "FastMDAnalysis" if name == "fastmdanalysis" else name.capitalize()
+        # Normalize display names for the primary tools we benchmark.
+        mapping = {
+            "fastmdanalysis": "FastMdAnalysis",
+            "mdtraj": "MdTraj",
+            "mdanalysis": "MdAnalysis",
+        }
+        return mapping.get(name.lower(), name.capitalize())
 
     def _fmt_range(values: List[int]) -> str:
         if not values:
@@ -345,33 +447,74 @@ def build_presentation(output_path: Path) -> None:
                 f"Instrumentation summary dataset '{summary_dataset}' does not match selected dataset '{DATASET_SLUG}'."
             )
 
+    # Add per-benchmark slides (charts etc.) but skip generating individual
+    # per-benchmark instrumentation overview slides — we'll include the
+    # instrumentation overview, modules/functions per benchmark, and the
+    # orchestrator LOC advantage on a single combined instrumentation slide.
     for benchmark_dir in benchmark_dirs:
         add_benchmark_slide(prs, benchmark_dir)
-        if not summary:
-            continue
 
-        benchmark_key = benchmark_dir.name.split("_", 1)[0]
-        chart_path = OVERVIEW_DIR / f"instrumentation_{benchmark_key}.png"
-        entry = per_benchmark.get(benchmark_key, {})
-        if not chart_path.exists() or not entry:
-            continue
+    # Create an orchestrator LOC advantage chart comparing the LOC required
+    # to run all analyses per-tool (assumes non-orchestrated tools need one
+    # snippet per analysis) versus FastMDAnalysis which can orchestrate all
+    # analyses with a single snippet.
+    if summary:
+        try:
+            loc_totals = summary.get("loc_totals", {})
+            ordered_tools = tools or list(loc_totals.keys())
+            analyses_count = 4
+            # Display/name mapping and standard colors requested
+            name_map = {
+                "fastmdanalysis": "FastMdAnalysis",
+                "mdtraj": "MdTraj",
+                "mdanalysis": "MdAnalysis",
+            }
+            color_map = {
+                "fastmdanalysis": "#1f77b4",  # blue
+                "mdtraj": "#ff7f0e",         # orange
+                "mdanalysis": "#7f7f7f",     # gray
+            }
 
-        notes: List[str] = []
-        ordered_tools = tools or list(entry.keys())
-        for tool in ordered_tools:
-            stats = entry.get(tool, {})
-            notes.append(
-                f"{_fmt_tool(tool)}: {stats.get('modules', 0)} modules, {stats.get('functions', 0)} functions, "
-                f"{stats.get('attempts', 0)} runs, {stats.get('successes', 0)} successful, {stats.get('exceptions', 0)} exceptions"
-            )
+            labels = []
+            required_loc = []
+            for tool in ordered_tools:
+                vals = loc_totals.get(tool, {})
+                total_loc = int(vals.get("total", vals.get("calc", 0) + vals.get("plot", 0)))
+                if tool.lower() == "fastmdanalysis":
+                    req = total_loc
+                else:
+                    req = total_loc * analyses_count
+                labels.append(name_map.get(tool.lower(), tool.capitalize()))
+                required_loc.append(req)
 
-        add_chart_slide(
-            prs,
-            f"{benchmark_key.upper()} instrumentation overview",
-            chart_path,
-            "Workflow touchpoints captured per tool",
-            notes=notes,
-        )
+            # Plot and save
+            fig, ax = plt.subplots(figsize=(8, 4.2))
+            x = np.arange(len(labels))
+            colors = [color_map.get(tool.lower(), "#bdbdbd") for tool in ordered_tools]
+            bars = ax.bar(x, required_loc, color=colors)
+            ax.set_xticks(x)
+            ax.set_xticklabels(labels)
+            ax.set_ylabel("Lines of Code")
+            ax.set_title("Orchestrator LOC advantage (running 4 analyses)")
+            # Annotate savings relative to FastMDAnalysis
+            try:
+                base = required_loc[labels.index("FastMDAnalysis")]
+                for xi, val in enumerate(required_loc):
+                    if labels[xi] != "FastMDAnalysis":
+                        savings = val - base
+                        ax.text(xi, val + max(1, val * 0.02), f"-{savings}", ha="center", va="bottom", fontsize=10, color="#333333")
+            except ValueError:
+                pass
+            fig.tight_layout()
+            outpath = OVERVIEW_DIR / "orchestrator_loc_advantage.png"
+            fig.savefig(outpath, bbox_inches="tight")
+            plt.close(fig)
+
+            # Orchestrator chart: do not add an individual slide here. It will
+            # be included on the combined instrumentation slide instead.
+        except Exception:
+            # Non-fatal; continue building presentation
+            pass
 
     if summary:
         add_summary_slide(prs, summary)
@@ -423,14 +566,10 @@ def build_presentation(output_path: Path) -> None:
                         f"{_fmt_tool(tool)} {calc_mem:.2f} MB calc / {plot_mem:.2f} MB plot ({total_mem:.2f} MB peak)"
                     )
                 instrumentation_notes.append("Aggregate peak memory: " + ", ".join(mem_chunks))
-        if INSTRUMENTATION_CHART.exists():
-            add_chart_slide(
-                prs,
-                "Instrumentation overview",
-                INSTRUMENTATION_CHART,
-                "Touchpoint counts captured per tool",
-                notes=instrumentation_notes,
-            )
+        # Do not add a standalone instrumentation overview slide here; the
+        # instrumentation overview image is included on the combined
+        # instrumentation slide along with modules/functions and the
+        # orchestrator LOC advantage.
 
     for chart in _overview_charts():
         chart_path = chart["path"]
@@ -509,6 +648,22 @@ def build_presentation(output_path: Path) -> None:
                     notes.append(
                         f"{_fmt_tool(tool)}: {calc_mem:.2f} MB calc, {plot_mem:.2f} MB plot ({total_mem:.2f} MB peak)"
                     )
+
+        # Skip individual slides for charts that are included in the combined
+        # overview slides (we already added them earlier). This includes both
+        # the aggregate overview set and the instrumentation combined set.
+        combined_files = {
+            "external_modules.png",
+            "loc_totals.png",
+            "runtime_totals.png",
+            "peak_mem_totals.png",
+            "instrumentation_overview.png",
+            "modules_per_benchmark.png",
+            "functions_per_benchmark.png",
+            "orchestrator_loc_advantage.png",
+        }
+        if chart_path.name in combined_files:
+            continue
 
         add_chart_slide(
             prs,

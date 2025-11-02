@@ -19,7 +19,7 @@ from palette import color_for, colors_for, label_for_tool
 AXIS_LABEL_SIZE = 18
 TICK_LABEL_SIZE = 16
 TITLE_FONT_SIZE = 20
-LEGEND_FONT_SIZE = 15
+LEGEND_FONT_SIZE = 13
 plt.rcParams.update({
     "axes.labelsize": AXIS_LABEL_SIZE,
     "axes.titlesize": TITLE_FONT_SIZE,
@@ -600,7 +600,7 @@ def main(argv: list[str] | None = None) -> None:
         },
         legend_order=["Plotting", "Calculation"],
         figsize=(8.0, 5.0),
-        legend_kwargs={"loc": "upper right"},
+    legend_kwargs={"loc": "upper left", "bbox_to_anchor": (0.0, 1.0), "borderaxespad": 0.2},
     )
 
     has_overhead = any(runtime_totals[tool]["overhead"] > 1e-6 for tool in TOOLS)
@@ -628,7 +628,7 @@ def main(argv: list[str] | None = None) -> None:
         series_colors=runtime_colors,
         legend_order=["Overhead", "Plotting", "Computation"] if has_overhead else ["Plotting", "Computation"],
         figsize=(8.0, 5.0),
-        legend_kwargs={"loc": "upper right"},
+    legend_kwargs={"loc": "upper left", "bbox_to_anchor": (0.0, 1.0), "borderaxespad": 0.2},
     )
 
     peak_mem_values = {

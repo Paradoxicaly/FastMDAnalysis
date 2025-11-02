@@ -462,6 +462,59 @@ def main(argv: list[str] | None = None) -> None:
 
         per_benchmark[benchmark] = benchmark_entry
 
+    orchestrator_metrics = RESULTS_ROOT / f"orchestrator_{DATASET_SLUG}" / "metrics.json"
+    if orchestrator_metrics.exists():
+        try:
+            orchestrator_data = json.loads(orchestrator_metrics.read_text(encoding="utf-8"))
+            fastmda_summary = orchestrator_data.get("summary", {}).get("fastmdanalysis", {})
+
+            def _mean(entry: dict, key: str) -> float:
+                value = entry.get(key)
+                if isinstance(value, dict):
+                    mean = value.get("mean")
+                    if mean is not None:
+                        try:
+                            return float(mean)
+                        except (TypeError, ValueError):
+                            return 0.0
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    return 0.0
+
+            loc_entry = fastmda_summary.get("loc", {})
+            loc_calc = int(loc_entry.get("calc", loc_entry.get("total", 0)) or 0)
+            loc_plot = int(loc_entry.get("plot", 0) or 0)
+            loc_totals["fastmdanalysis"]["calc"] = loc_calc
+            loc_totals["fastmdanalysis"]["plot"] = loc_plot
+
+            calc_runtime = _mean(fastmda_summary, "calc_s")
+            plot_runtime = _mean(fastmda_summary, "plot_s")
+            total_runtime = _mean(fastmda_summary, "total_s")
+            if total_runtime == 0.0:
+                total_runtime = _mean(fastmda_summary, "elapsed_s")
+            overhead_runtime = max(total_runtime - calc_runtime - plot_runtime, 0.0)
+            runtime_totals["fastmdanalysis"] = {
+                "calc": calc_runtime,
+                "plot": plot_runtime,
+                "overhead": overhead_runtime,
+                "total": total_runtime if total_runtime > 0.0 else calc_runtime + plot_runtime + overhead_runtime,
+            }
+
+            calc_mem = _mean(fastmda_summary, "calc_mem_mb")
+            plot_mem = _mean(fastmda_summary, "plot_mem_mb")
+            peak_mem = _mean(fastmda_summary, "peak_mem_mb")
+            if peak_mem <= 0.0:
+                peak_mem = calc_mem + plot_mem
+            peak_mem_totals["fastmdanalysis"] = {
+                "calc": calc_mem,
+                "plot": plot_mem,
+                "total": peak_mem,
+            }
+        except Exception:
+            
+            pass
+
     aggregated_summary = {
         tool: {
             "modules": len(aggregated_modules[tool]),
@@ -587,7 +640,7 @@ def main(argv: list[str] | None = None) -> None:
         "Plotting": [loc_totals[tool]["plot"] for tool in TOOLS],
     }
     _render_bar_chart(
-        title="Snippet lines of code (calc vs plot) across benchmarks",
+        title="Snippet lines of code (calc vs plot) overview",
         ylabel="Lines",
         labels=agg_labels,
         values=loc_values,
@@ -600,7 +653,7 @@ def main(argv: list[str] | None = None) -> None:
         },
         legend_order=["Plotting", "Calculation"],
         figsize=(8.0, 5.0),
-    legend_kwargs={"loc": "upper left", "bbox_to_anchor": (0.0, 1.0), "borderaxespad": 0.2},
+        legend_kwargs={"loc": "upper left", "bbox_to_anchor": (0.0, 1.0), "borderaxespad": 0.2},
     )
 
     has_overhead = any(runtime_totals[tool]["overhead"] > 1e-6 for tool in TOOLS)
@@ -618,7 +671,7 @@ def main(argv: list[str] | None = None) -> None:
         runtime_values["Overhead"] = [runtime_totals[tool]["overhead"] for tool in TOOLS]
         runtime_colors["Overhead"] = [_lighten_hex(color, 0.35) for color in comp_colors]
     _render_bar_chart(
-        title="Aggregate runtime footprint",
+        title="Runtime footprint overview",
         ylabel="Seconds",
         labels=agg_labels,
         values=runtime_values,
@@ -628,7 +681,7 @@ def main(argv: list[str] | None = None) -> None:
         series_colors=runtime_colors,
         legend_order=["Overhead", "Plotting", "Computation"] if has_overhead else ["Plotting", "Computation"],
         figsize=(8.0, 5.0),
-    legend_kwargs={"loc": "upper left", "bbox_to_anchor": (0.0, 1.0), "borderaxespad": 0.2},
+        legend_kwargs={"loc": "upper left", "bbox_to_anchor": (0.0, 1.0), "borderaxespad": 0.2},
     )
 
     peak_mem_values = {
@@ -641,7 +694,7 @@ def main(argv: list[str] | None = None) -> None:
         "Plotting": [_lighten_hex(color, 0.55) for color in base_colors],
     }
     _render_bar_chart(
-        title="Aggregate peak memory footprint",
+        title="Peak memory footprint overview",
         ylabel="Megabytes",
         labels=agg_labels,
         values=peak_mem_values,

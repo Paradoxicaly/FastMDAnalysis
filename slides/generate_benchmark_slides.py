@@ -95,13 +95,13 @@ def _overview_charts() -> List[dict[str, object]]:
             "summary_key": "loc_totals",
         },
         {
-            "title": "Aggregate runtime footprint",
+            "title": "Runtime footprint overview",
             "path": OVERVIEW_DIR / "runtime_totals.png",
             "caption": "Total computation vs plotting time across benchmarks",
             "summary_key": "runtime_totals",
         },
         {
-            "title": "Aggregate peak memory footprint",
+            "title": "Peak memory footprint overview",
             "path": OVERVIEW_DIR / "peak_mem_totals.png",
             "caption": "Peak memory split between computation and plotting helpers",
             "summary_key": "peak_mem_totals",
@@ -257,7 +257,7 @@ def add_summary_slide(prs: Presentation, summary: dict) -> None:
             chunks.append(
                 f"{_fmt_tool(tool)} {calc_lines} calc / {plot_lines} plot ({total_lines} total) lines"
             )
-        snippet_para.text = "Snippet footprint: " + ", ".join(chunks) + "."
+        snippet_para.text = "Snippet footprint overview: " + ", ".join(chunks) + "."
 
     if runtime_totals:
         runtime_para = frame.add_paragraph()
@@ -273,7 +273,7 @@ def add_summary_slide(prs: Presentation, summary: dict) -> None:
             if overhead_runtime > 1e-3:
                 parts += f" / {overhead_runtime:.2f}s overhead"
             runtime_chunks.append(f"{parts} ({total_runtime:.2f}s total)")
-        runtime_para.text = "Aggregate runtime: " + ", ".join(runtime_chunks) + "."
+        runtime_para.text = "Runtime overview: " + ", ".join(runtime_chunks) + "."
 
     if peak_mem_totals:
         mem_para = frame.add_paragraph()
@@ -287,7 +287,7 @@ def add_summary_slide(prs: Presentation, summary: dict) -> None:
             mem_chunks.append(
                 f"{_fmt_tool(tool)} {calc_mem:.2f} MB calc / {plot_mem:.2f} MB plot ({total_mem:.2f} MB peak)"
             )
-        mem_para.text = "Aggregate peak memory: " + ", ".join(mem_chunks) + "."
+        mem_para.text = "Peak memory overview: " + ", ".join(mem_chunks) + "."
 
     closing = frame.add_paragraph()
     closing.level = 1
@@ -304,8 +304,8 @@ def add_combined_overview_slide(prs: Presentation, overview_dir: Path) -> None:
     files = [
         ("External module dependencies", overview_dir / "external_modules.png"),
         ("Snippet lines of code (calc vs plot)", overview_dir / "loc_totals.png"),
-        ("Aggregate runtime footprint", overview_dir / "runtime_totals.png"),
-        ("Aggregate peak memory footprint", overview_dir / "peak_mem_totals.png"),
+        ("Runtime footprint overview", overview_dir / "runtime_totals.png"),
+        ("Peak memory footprint overview", overview_dir / "peak_mem_totals.png"),
     ]
     # Only add the slide if at least one of the files exists
     if not any(p.exists() for _, p in files):
@@ -368,9 +368,10 @@ def add_orchestrator_single_run_slide(prs: Presentation, results_root: Path, ove
     agg_calc_mem = agg_plot_mem = agg_over_mem = 0.0
     agg_runtime = 0.0
     agg_peak = 0.0
-    agg_loc_calc = agg_loc_plot = agg_loc_total = None
+    agg_loc_calc = agg_loc_plot = agg_loc_total = 0.0
     summary_runtime: dict | None = None
     summary_memory: dict | None = None
+    summary_loc_calc = summary_loc_plot = summary_loc_total = None
     per_analysis_totals: dict[str, float] = {}
     if summary:
         runtime_totals = summary.get("runtime_totals", {})
@@ -381,9 +382,9 @@ def add_orchestrator_single_run_slide(prs: Presentation, results_root: Path, ove
         summary_memory = peak_mem_totals.get(fd)
         if loc_totals.get(fd):
             loc_vals = loc_totals[fd]
-            agg_loc_calc = float(loc_vals.get("calc", 0))
-            agg_loc_plot = float(loc_vals.get("plot", 0))
-            agg_loc_total = float(
+            summary_loc_calc = float(loc_vals.get("calc", 0))
+            summary_loc_plot = float(loc_vals.get("plot", 0))
+            summary_loc_total = float(
                 loc_vals.get(
                     "total",
                     loc_vals.get("calc", 0) + loc_vals.get("plot", 0),
@@ -418,10 +419,20 @@ def add_orchestrator_single_run_slide(prs: Presentation, results_root: Path, ove
         plot_mem = float(summary_entry.get("plot_mem_mb", {}).get("mean", 0.0))
         peak_mem = float(summary_entry.get("peak_mem_mb", {}).get("mean", max(calc_mem, plot_mem)))
         overhead_mem = max(peak_mem - calc_mem - plot_mem, 0.0)
-        agg_calc_mem += calc_mem
-        agg_plot_mem += plot_mem
-        agg_over_mem += overhead_mem
-        agg_peak += peak_mem
+        if peak_mem >= agg_peak:
+            agg_peak = peak_mem
+            agg_calc_mem = calc_mem
+            agg_plot_mem = plot_mem
+            agg_over_mem = overhead_mem
+
+        loc_stats = summary_entry.get("loc", {})
+        calc_loc = float(loc_stats.get("calc", 0.0) or 0.0)
+        plot_loc = float(loc_stats.get("plot", 0.0) or 0.0)
+        total_loc = float(loc_stats.get("total", calc_loc + plot_loc))
+        if calc_loc or plot_loc or total_loc:
+            agg_loc_calc += calc_loc
+            agg_loc_plot += plot_loc
+            agg_loc_total += total_loc
 
     runtime_calc_sum = agg_calc_runtime
     runtime_plot_sum = agg_plot_runtime
@@ -464,12 +475,10 @@ def add_orchestrator_single_run_slide(prs: Presentation, results_root: Path, ove
         agg_peak = agg_calc_mem + agg_plot_mem + agg_over_mem
         agg_over_mem = max(agg_over_mem, 0.0)
 
-    if agg_loc_calc is None:
-        agg_loc_calc = 0.0
-    if agg_loc_plot is None:
-        agg_loc_plot = 0.0
-    if agg_loc_total is None:
-        agg_loc_total = agg_loc_calc + agg_loc_plot
+    if agg_loc_total == 0.0 and summary_loc_total is not None:
+        agg_loc_calc = summary_loc_calc or 0.0
+        agg_loc_plot = summary_loc_plot or 0.0
+        agg_loc_total = summary_loc_total or (agg_loc_calc + agg_loc_plot)
 
     # Single-run orchestrator metrics
     orch_metrics_path = orchestrator_dir / "metrics.json"

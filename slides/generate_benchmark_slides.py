@@ -281,9 +281,9 @@ def add_summary_slide(prs: Presentation, summary: dict) -> None:
         timing_note.font.size = Pt(12)
         timing_note.font.italic = True
         timing_note.text = (
-            "Note: FastMDAnalysis metrics show aggregate of 4 separate analysis calls "
-            "(rmsd, rmsf, rg, cluster) for fair comparison with other tools. "
-            "The orchestrator analyze() approach is shown separately in LOC comparison charts."
+            "Note: All tools show aggregate of 4 separate analysis calls (rmsd, rmsf, rg, cluster) "
+            "using pre-loaded trajectories for apples-to-apples comparison. FastMDAnalysis orchestrator "
+            "approach (single analyze() call) is preserved for LOC comparison only."
         )
 
     if peak_mem_totals:

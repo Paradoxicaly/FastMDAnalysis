@@ -218,7 +218,15 @@ def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instru
     per_analysis_breakdown: dict[str, float] = {}
     slides_seconds = 0.0
     try:
+        # Pre-load FastMDAnalysis object BEFORE timing starts (like individual benchmarks)
+        # This excludes trajectory loading overhead for fair "apples-to-apples" comparison
         fastmda = FastMDAnalysis(str(traj), str(top), frames=FRAME_SLICE)
+        
+        # Reset tracemalloc after loading to exclude trajectory loading memory
+        tracemalloc.stop()
+        tracemalloc.start()
+        
+        # NOW start timing the actual analyze() call
         start_total = time.perf_counter()
         start_calc = time.perf_counter()
         results = fastmda.analyze(

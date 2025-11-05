@@ -543,13 +543,11 @@ def main(argv: list[str] | None = None) -> None:
                 "total": peak_mem,
             }
             
-            # Keep orchestrator data separate for LOC comparison chart
-            # For the main charts (Dependencies, LOC, Runtime, Memory overview),
-            # use aggregate data for fair comparison across all tools
-            # The orchestrator approach includes file I/O overhead not present in benchmarks
+            # Keep orchestrator data separate for LOC comparison
+            # Use aggregate data for overview charts for true apples-to-apples comparison
+            # Even with pre-loading, orchestrator has workflow overhead not present in individual benchmarks
             loc_totals["fastmdanalysis"] = {"calc": loc_calc, "plot": loc_plot}
-            # NOTE: We don't override runtime_totals or peak_mem_totals
-            # They remain as aggregate for fair comparison
+            # NOTE: runtime_totals and peak_mem_totals remain as aggregate
         except Exception:
             
             pass

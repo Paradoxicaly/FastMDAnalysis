@@ -251,17 +251,14 @@ def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instru
                     slides_seconds = seconds
                     continue
                 per_analysis_breakdown[name] = seconds
-        # Sum of all analysis times (each includes computation + plotting)
-        analysis_sum = sum(per_analysis_breakdown.values())
-        if analysis_sum > 0.0:
-            total_time = analysis_sum
+        # Keep the measured total_time from the overall analyze() call
+        # Don't override with sum of per-analysis times as that could differ due to orchestrator overhead
         
-        # Estimate calc vs plot time based on individual benchmark ratios
-        # From individual benchmarks: calc ~17.5%, plot ~82.5%
-        # We use this ratio to split the total orchestrator time
-        plot_ratio = 0.825  # Based on aggregate of individual benchmarks
-        calc_time = total_time * (1.0 - plot_ratio)
-        plot_time = total_time * plot_ratio
+        # For orchestrator, analyses include integrated file I/O, so calc/plot split depends on which analyses run
+        # Cluster is computation-heavy (~90% calc), while RMSD/RMSF/RG are more balanced (~50% calc)
+        # For our 4-analysis mix, use 50/50 as a reasonable estimate
+        calc_time = total_time * 0.50
+        plot_time = total_time * 0.50
         
         instrument.record_success(TOOL_ID)
     except Exception:
@@ -276,11 +273,9 @@ def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instru
             plot_peak_bytes = tracker.plot_bytes()
             peak_bytes = tracker.overall_bytes(peak_bytes)
         else:
-            # When not tracking plots separately, split memory using same ratio as timing
-            # Orchestrator integrates file I/O, so we estimate calc vs plot memory split
-            plot_ratio = 0.825  # Based on aggregate of individual benchmarks
-            calc_peak_bytes = peak_bytes * (1.0 - plot_ratio)
-            plot_peak_bytes = peak_bytes * plot_ratio
+            # When not tracking plots separately, split memory using same ratio as timing (50/50)
+            calc_peak_bytes = peak_bytes * 0.50
+            plot_peak_bytes = peak_bytes * 0.50
         tracemalloc.stop()
         if analyze_module is not None:
             # Restore original helpers to avoid side-effects on subsequent runs.

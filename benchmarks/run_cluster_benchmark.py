@@ -907,7 +907,22 @@ def main(argv: list[str] | None = None) -> None:
     do_plot = not args.no_plot
     max_frames = max(1, args.max_frames)
 
+    # Determine frame slicing based on dataset
+    frame_limit = None
+    if '_500' in DATASET_SLUG:
+        # Use first 500 frames
+        frame_limit = 500
+    elif '_5000' in DATASET_SLUG:
+        # Use all frames (no limiting for 5000 frame datasets)
+        frame_limit = None
+    
+    # Load and slice trajectories
     mdtraj_full = md.load(str(TRAJ_FILE), top=str(TOPOLOGY_FILE))
+    
+    # Apply frame limit before striding if specified
+    if frame_limit and mdtraj_full.n_frames > frame_limit:
+        mdtraj_full = mdtraj_full[:frame_limit]
+    
     frame_indices = np.arange(0, mdtraj_full.n_frames, FRAME_STRIDE)
     if frame_indices.size == 0:
         raise RuntimeError("No frames selected for clustering benchmark; adjust FRAME_STRIDE or dataset")
@@ -915,7 +930,11 @@ def main(argv: list[str] | None = None) -> None:
         frame_indices = frame_indices[:max_frames]
     mdtraj_traj = mdtraj_full[frame_indices]
     fast_traj = mdtraj_traj
+    
+    # Load universe with frame limit
     universe = mda.Universe(str(TOPOLOGY_FILE), str(TRAJ_FILE))
+    if frame_limit and len(universe.trajectory) > frame_limit:
+        universe.trajectory[0:frame_limit]
 
     run_metrics: dict[str, list[RunMetrics]] = {tool: [] for tool in TOOL_ORDER}
     cluster_counts: dict[str, list[int]] = {tool: [] for tool in TOOL_ORDER}

@@ -148,12 +148,23 @@ def _collect_loc_metrics() -> dict[str, int]:
 
 
 def _set_dataset(slug: str) -> None:
-    global DATASET_SLUG, DATASET_LABEL, OUTPUT_ROOT
+    global DATASET_SLUG, DATASET_LABEL, OUTPUT_ROOT, FRAME_SLICE
     config = get_dataset_config(slug)
     DATASET_SLUG = config.slug
     DATASET_LABEL = config.label
     OUTPUT_ROOT = PROJECT_ROOT / "benchmarks" / "results" / f"orchestrator_{DATASET_SLUG}"
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+    
+    # Adjust FRAME_SLICE based on dataset
+    if '_500' in slug:
+        # For 500 frame datasets: use first 500 frames with no stride
+        FRAME_SLICE = (0, 500, 1)
+    elif '_5000' in slug:
+        # For 5000 frame datasets: use all frames with no stride
+        FRAME_SLICE = (0, -1, 1)
+    else:
+        # Default: use stride for smaller benchmark
+        FRAME_SLICE = (0, FRAME_STRIDE * MAX_FRAMES, FRAME_STRIDE)
 
 
 def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instrumentation) -> RunMetrics:

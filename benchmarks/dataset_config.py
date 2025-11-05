@@ -47,6 +47,22 @@ _register_dataset(
 )
 
 _register_dataset(
+    key="trpcage_500",
+    slug="trpcage_500",
+    label="Trp-cage 500",
+    traj_rel="trp_cage.dcd",
+    top_rel="trp_cage.pdb",
+)
+
+_register_dataset(
+    key="trpcage_5000",
+    slug="trpcage_5000",
+    label="Trp-cage 5000",
+    traj_rel="trp_cage.dcd",
+    top_rel="trp_cage.pdb",
+)
+
+_register_dataset(
     key="ubiquitin",
     slug="ubiquitin",
     label="Ubiquitin",
@@ -58,6 +74,22 @@ _register_dataset(
     key="ubiquitin99",
     slug="ubiquitin99",
     label="Ubiquitin 99",
+    traj_rel="ubiquitin/Q99.dcd",
+    top_rel="ubiquitin/topology.pdb",
+)
+
+_register_dataset(
+    key="ubiquitin99_500",
+    slug="ubiquitin99_500",
+    label="Ubiquitin 99 (500 frames)",
+    traj_rel="ubiquitin/Q99.dcd",
+    top_rel="ubiquitin/topology.pdb",
+)
+
+_register_dataset(
+    key="ubiquitin99_5000",
+    slug="ubiquitin99_5000",
+    label="Ubiquitin 99 (5000 frames)",
     traj_rel="ubiquitin/Q99.dcd",
     top_rel="ubiquitin/topology.pdb",
 )

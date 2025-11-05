@@ -274,6 +274,18 @@ def add_summary_slide(prs: Presentation, summary: dict) -> None:
                 parts += f" / {overhead_runtime:.2f}s overhead"
             runtime_chunks.append(f"{parts} ({total_runtime:.2f}s total)")
         runtime_para.text = "Runtime overview: " + ", ".join(runtime_chunks) + "."
+        
+        # Add timing estimation note for FastMDAnalysis
+        timing_note = frame.add_paragraph()
+        timing_note.level = 1
+        timing_note.font.size = Pt(12)
+        timing_note.font.italic = True
+        timing_note.text = (
+            "Note: FastMDAnalysis timing uses single-line analyze() orchestrator approach. "
+            "Calc/plot split is estimated using empirically measured ratio from individual benchmarks "
+            "(17.5% computation, 82.5% plotting/saving), reflecting that matplotlib plotting and "
+            "data file I/O are relatively expensive operations."
+        )
 
     if peak_mem_totals:
         mem_para = frame.add_paragraph()

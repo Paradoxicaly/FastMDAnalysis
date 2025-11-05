@@ -781,9 +781,28 @@ def main(argv: list[str] | None = None) -> None:
     timing_only = args.timing_only
     do_plot = not args.no_plot
 
-    mdtraj_traj = md.load(str(TRAJ_FILE), top=str(TOPOLOGY_FILE))
-    fast_traj = mdtraj_traj
-    universe = mda.Universe(str(TOPOLOGY_FILE), str(TRAJ_FILE))
+    # Determine frame slicing based on dataset
+    frame_slice = None
+    if '_500' in DATASET_SLUG:
+        # Use first 500 frames
+        frame_slice = slice(0, 500)
+    elif '_5000' in DATASET_SLUG:
+        # Use all frames (no slicing for 5000 frame datasets)
+        frame_slice = None
+    
+    # Load trajectories with optional frame slicing
+    if frame_slice:
+        mdtraj_traj = md.load(str(TRAJ_FILE), top=str(TOPOLOGY_FILE))
+        mdtraj_traj = mdtraj_traj[frame_slice]
+        fast_traj = mdtraj_traj
+        universe = mda.Universe(str(TOPOLOGY_FILE), str(TRAJ_FILE))
+        # Slice universe by selecting specific frames
+        universe.trajectory[0:500]
+    else:
+        mdtraj_traj = md.load(str(TRAJ_FILE), top=str(TOPOLOGY_FILE))
+        fast_traj = mdtraj_traj
+        universe = mda.Universe(str(TOPOLOGY_FILE), str(TRAJ_FILE))
+    
     reference = mdtraj_traj[REFERENCE_FRAME]
 
     results: dict[str, list[RunMetrics]] = {

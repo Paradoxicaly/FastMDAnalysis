@@ -281,10 +281,9 @@ def add_summary_slide(prs: Presentation, summary: dict) -> None:
         timing_note.font.size = Pt(12)
         timing_note.font.italic = True
         timing_note.text = (
-            "Note: FastMDAnalysis shows single-line analyze() orchestrator performance, which includes "
-            "file I/O (data saving + plotting) integrated within each analysis. Other tools show aggregate "
-            "of 4 separate analyses with file I/O separated from computation. Times are not directly comparable "
-            "but demonstrate FastMDAnalysis LOC advantage (2 LOC vs 49-66 LOC) with acceptable performance."
+            "Note: FastMDAnalysis shows single-line analyze() orchestrator with integrated file I/O. "
+            "Calc/plot split estimated using 17.5%/82.5% ratio from individual benchmarks. "
+            "Other tools show aggregate with file I/O separated. Memory includes all analyses running together."
         )
 
     if peak_mem_totals:

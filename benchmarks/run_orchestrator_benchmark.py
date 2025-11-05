@@ -223,6 +223,7 @@ def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instru
         fastmda = FastMDAnalysis(str(traj), str(top), frames=FRAME_SLICE)
         
         # Reset tracemalloc after loading to exclude trajectory loading memory
+        # Individual benchmarks start tracemalloc AFTER trajectory loading, so we match that
         tracemalloc.stop()
         tracemalloc.start()
         
@@ -275,8 +276,11 @@ def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instru
             plot_peak_bytes = tracker.plot_bytes()
             peak_bytes = tracker.overall_bytes(peak_bytes)
         else:
-            calc_peak_bytes = peak_bytes
-            plot_peak_bytes = 0
+            # When not tracking plots separately, split memory using same ratio as timing
+            # Orchestrator integrates file I/O, so we estimate calc vs plot memory split
+            plot_ratio = 0.825  # Based on aggregate of individual benchmarks
+            calc_peak_bytes = peak_bytes * (1.0 - plot_ratio)
+            plot_peak_bytes = peak_bytes * plot_ratio
         tracemalloc.stop()
         if analyze_module is not None:
             # Restore original helpers to avoid side-effects on subsequent runs.

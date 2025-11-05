@@ -543,10 +543,8 @@ def main(argv: list[str] | None = None) -> None:
                 "total": peak_mem,
             }
             
-            # Use orchestrator data for overview charts - it represents real single-line analyze() performance
-            # The orchestrator times include file I/O (saving data files and generating plots) within each analysis,
-            # whereas individual benchmarks artificially separate computation from file I/O for measurement purposes
-            # This makes orchestrator times appear ~2x slower than aggregate, but it's the accurate real-world performance
+            # Use orchestrator data for both runtime and memory - represents real single-line analyze() performance
+            # The orchestrator times and memory include integrated file I/O (saving + plotting) within analyses
             loc_totals["fastmdanalysis"] = {"calc": loc_calc, "plot": loc_plot}
             runtime_totals["fastmdanalysis"] = orchestrator_runtime_totals["fastmdanalysis"]
             peak_mem_totals["fastmdanalysis"] = orchestrator_peak_mem_totals["fastmdanalysis"]

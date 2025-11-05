@@ -942,7 +942,11 @@ def build_presentation(output_path: Path) -> None:
     # analyses with a single snippet.
     if summary:
         try:
+            # Use aggregated_loc_totals which has the summed LOC from individual benchmarks
+            aggregated_loc = summary.get("aggregated_loc_totals", {})
+            orchestrator_loc = summary.get("orchestrator_loc_totals", {})
             loc_totals = summary.get("loc_totals", {})
+            
             ordered_tools = tools or list(loc_totals.keys())
             analyses_count = 4
             # Display/name mapping and standard colors requested
@@ -958,35 +962,53 @@ def build_presentation(output_path: Path) -> None:
             }
 
             labels = []
-            required_loc = []
+            aggregate_loc = []
+            orchestrator_vals = []
+            
             for tool in ordered_tools:
-                vals = loc_totals.get(tool, {})
-                total_loc = int(vals.get("total", vals.get("calc", 0) + vals.get("plot", 0)))
-                if tool.lower() == "fastmdanalysis":
-                    req = total_loc
-                else:
-                    req = total_loc * analyses_count
+                # Use aggregated_loc_totals which contains the summed LOC from individual benchmarks
+                vals = aggregated_loc.get(tool, loc_totals.get(tool, {}))
+                total_loc = int(vals.get("calc", 0) + vals.get("plot", 0))
+                
                 labels.append(name_map.get(tool.lower(), tool.capitalize()))
-                required_loc.append(req)
+                aggregate_loc.append(total_loc)
+                
+                # For FastMDAnalysis, add orchestrator LOC
+                if tool.lower() == "fastmdanalysis" and orchestrator_loc.get(tool):
+                    orch_vals = orchestrator_loc.get(tool, {})
+                    orch_total = int(orch_vals.get("calc", 0) + orch_vals.get("plot", 0))
+                    orchestrator_vals.append(orch_total)
+                else:
+                    orchestrator_vals.append(total_loc)
 
-            # Plot and save
+            # Plot and save - show comparison between aggregate and orchestrator
             fig, ax = plt.subplots(figsize=(8, 4.2))
             x = np.arange(len(labels))
-            colors = [color_map.get(tool.lower(), "#bdbdbd") for tool in ordered_tools]
-            bars = ax.bar(x, required_loc, color=colors)
+            width = 0.35
+            colors_list = [color_map.get(tool.lower(), "#bdbdbd") for tool in ordered_tools]
+            
+            # For tools without orchestrator, show single bar
+            # For FastMDAnalysis, show two bars
+            bars_aggregate = ax.bar(x - width/2, aggregate_loc, width, label='Aggregate (4 separate calls)', 
+                                   color=colors_list, alpha=0.7)
+            bars_orchestrator = ax.bar(x + width/2, orchestrator_vals, width, label='Orchestrator (analyze)', 
+                                      color=colors_list)
+            
             ax.set_xticks(x)
             ax.set_xticklabels(labels)
             ax.set_ylabel("Lines of Code")
-            ax.set_title("Orchestrator LOC advantage (running 4 analyses)")
-            # Annotate savings relative to FastMDAnalysis
-            try:
-                base = required_loc[labels.index("FastMDAnalysis")]
-                for xi, val in enumerate(required_loc):
-                    if labels[xi] != "FastMDAnalysis":
-                        savings = val - base
-                        ax.text(xi, val + max(1, val * 0.02), f"-{savings}", ha="center", va="bottom", fontsize=10, color="#333333")
-            except ValueError:
-                pass
+            ax.set_title("LOC Comparison: Aggregate vs Orchestrator (4 analyses)")
+            ax.legend()
+            
+            # Annotate bars with values
+            for bars in [bars_aggregate, bars_orchestrator]:
+                for bar in bars:
+                    height = bar.get_height()
+                    if height > 0:
+                        ax.text(bar.get_x() + bar.get_width()/2., height,
+                               f'{int(height)}',
+                               ha='center', va='bottom', fontsize=9)
+            
             fig.tight_layout()
             outpath = OVERVIEW_DIR / "orchestrator_loc_advantage.png"
             fig.savefig(outpath, bbox_inches="tight")
@@ -994,8 +1016,9 @@ def build_presentation(output_path: Path) -> None:
 
             # Orchestrator chart: do not add an individual slide here. It will
             # be included on the combined instrumentation slide instead.
-        except Exception:
+        except Exception as e:
             # Non-fatal; continue building presentation
+            print(f"Warning: Failed to create orchestrator LOC advantage chart: {e}")
             pass
 
     if summary:

@@ -462,6 +462,13 @@ def main(argv: list[str] | None = None) -> None:
 
         per_benchmark[benchmark] = benchmark_entry
 
+    # Store aggregated LOC before potentially overwriting with orchestrator data
+    aggregated_loc_totals = {
+        tool: {"calc": loc_totals[tool]["calc"], "plot": loc_totals[tool]["plot"]}
+        for tool in TOOLS
+    }
+    orchestrator_loc_totals: Dict[str, Dict[str, int]] = {}
+
     orchestrator_metrics = RESULTS_ROOT / f"orchestrator_{DATASET_SLUG}" / "metrics.json"
     if orchestrator_metrics.exists():
         try:
@@ -485,6 +492,9 @@ def main(argv: list[str] | None = None) -> None:
             loc_entry = fastmda_summary.get("loc", {})
             loc_calc = int(loc_entry.get("calc", loc_entry.get("total", 0)) or 0)
             loc_plot = int(loc_entry.get("plot", 0) or 0)
+            # Store orchestrator LOC separately
+            orchestrator_loc_totals["fastmdanalysis"] = {"calc": loc_calc, "plot": loc_plot}
+            # Use orchestrator LOC for main totals (for runtime/memory comparison)
             loc_totals["fastmdanalysis"]["calc"] = loc_calc
             loc_totals["fastmdanalysis"]["plot"] = loc_plot
 
@@ -538,6 +548,8 @@ def main(argv: list[str] | None = None) -> None:
         "per_benchmark": per_benchmark,
         "aggregated": aggregated_summary,
         "loc_totals": loc_totals,
+        "aggregated_loc_totals": aggregated_loc_totals,
+        "orchestrator_loc_totals": orchestrator_loc_totals,
         "runtime_totals": runtime_totals,
         "peak_mem_totals": peak_mem_totals,
         "aggregated_details": aggregated_details,

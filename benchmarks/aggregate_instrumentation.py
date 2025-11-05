@@ -462,12 +462,34 @@ def main(argv: list[str] | None = None) -> None:
 
         per_benchmark[benchmark] = benchmark_entry
 
-    # Store aggregated LOC before potentially overwriting with orchestrator data
+    # Store aggregated totals before potentially loading orchestrator data
+    # The aggregated totals represent the sum of running 4 separate analyses
     aggregated_loc_totals = {
         tool: {"calc": loc_totals[tool]["calc"], "plot": loc_totals[tool]["plot"]}
         for tool in TOOLS
     }
+    aggregated_runtime_totals = {
+        tool: {
+            "calc": runtime_totals[tool]["calc"],
+            "plot": runtime_totals[tool]["plot"],
+            "overhead": runtime_totals[tool]["overhead"],
+            "total": runtime_totals[tool]["total"],
+        }
+        for tool in TOOLS
+    }
+    aggregated_peak_mem_totals = {
+        tool: {
+            "calc": peak_mem_totals[tool]["calc"],
+            "plot": peak_mem_totals[tool]["plot"],
+            "total": peak_mem_totals[tool]["total"],
+        }
+        for tool in TOOLS
+    }
+    
+    # Orchestrator data (if available) - represents running a single analyze() call
     orchestrator_loc_totals: Dict[str, Dict[str, int]] = {}
+    orchestrator_runtime_totals: Dict[str, Dict[str, float]] = {}
+    orchestrator_peak_mem_totals: Dict[str, Dict[str, float]] = {}
 
     orchestrator_metrics = RESULTS_ROOT / f"orchestrator_{DATASET_SLUG}" / "metrics.json"
     if orchestrator_metrics.exists():
@@ -489,38 +511,43 @@ def main(argv: list[str] | None = None) -> None:
                 except (TypeError, ValueError):
                     return 0.0
 
+            # Store orchestrator LOC separately (don't overwrite aggregated)
             loc_entry = fastmda_summary.get("loc", {})
             loc_calc = int(loc_entry.get("calc", loc_entry.get("total", 0)) or 0)
             loc_plot = int(loc_entry.get("plot", 0) or 0)
-            # Store orchestrator LOC separately
             orchestrator_loc_totals["fastmdanalysis"] = {"calc": loc_calc, "plot": loc_plot}
-            # Use orchestrator LOC for main totals (for runtime/memory comparison)
-            loc_totals["fastmdanalysis"]["calc"] = loc_calc
-            loc_totals["fastmdanalysis"]["plot"] = loc_plot
 
+            # Store orchestrator runtime separately (don't overwrite aggregated)
             calc_runtime = _mean(fastmda_summary, "calc_s")
             plot_runtime = _mean(fastmda_summary, "plot_s")
             total_runtime = _mean(fastmda_summary, "total_s")
             if total_runtime == 0.0:
                 total_runtime = _mean(fastmda_summary, "elapsed_s")
             overhead_runtime = max(total_runtime - calc_runtime - plot_runtime, 0.0)
-            runtime_totals["fastmdanalysis"] = {
+            orchestrator_runtime_totals["fastmdanalysis"] = {
                 "calc": calc_runtime,
                 "plot": plot_runtime,
                 "overhead": overhead_runtime,
                 "total": total_runtime if total_runtime > 0.0 else calc_runtime + plot_runtime + overhead_runtime,
             }
 
+            # Store orchestrator memory separately (don't overwrite aggregated)
             calc_mem = _mean(fastmda_summary, "calc_mem_mb")
             plot_mem = _mean(fastmda_summary, "plot_mem_mb")
             peak_mem = _mean(fastmda_summary, "peak_mem_mb")
             if peak_mem <= 0.0:
                 peak_mem = calc_mem + plot_mem
-            peak_mem_totals["fastmdanalysis"] = {
+            orchestrator_peak_mem_totals["fastmdanalysis"] = {
                 "calc": calc_mem,
                 "plot": plot_mem,
                 "total": peak_mem,
             }
+            
+            # For the main charts (Dependencies, LOC, Runtime, Memory overview),
+            # use orchestrator data for FastMDAnalysis to show single-line analyze approach
+            loc_totals["fastmdanalysis"] = {"calc": loc_calc, "plot": loc_plot}
+            runtime_totals["fastmdanalysis"] = orchestrator_runtime_totals["fastmdanalysis"]
+            peak_mem_totals["fastmdanalysis"] = orchestrator_peak_mem_totals["fastmdanalysis"]
         except Exception:
             
             pass
@@ -551,7 +578,11 @@ def main(argv: list[str] | None = None) -> None:
         "aggregated_loc_totals": aggregated_loc_totals,
         "orchestrator_loc_totals": orchestrator_loc_totals,
         "runtime_totals": runtime_totals,
+        "aggregated_runtime_totals": aggregated_runtime_totals,
+        "orchestrator_runtime_totals": orchestrator_runtime_totals,
         "peak_mem_totals": peak_mem_totals,
+        "aggregated_peak_mem_totals": aggregated_peak_mem_totals,
+        "orchestrator_peak_mem_totals": orchestrator_peak_mem_totals,
         "aggregated_details": aggregated_details,
         "metadata": {
             "benchmarks": list(BENCHMARK_DIRS.keys()),

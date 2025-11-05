@@ -257,9 +257,10 @@ def _run_mdanalysis(
         "_save_bar_plot",
     ])
     universe.trajectory[0]
+    analysis = rms.RMSF(universe.atoms)
     tracemalloc.reset_peak()
     start_calc = time.perf_counter()
-    analysis = rms.RMSF(universe.atoms).run()
+    analysis.run()
     values = analysis.results.rmsf / 10.0
     calc_time = time.perf_counter() - start_calc
     calc_peak_mb = tracemalloc.get_traced_memory()[1] / (1024 ** 2)

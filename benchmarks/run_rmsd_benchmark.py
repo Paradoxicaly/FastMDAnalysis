@@ -266,10 +266,10 @@ def _run_mdanalysis(
     ])
 
     universe.trajectory[0]
-    tracemalloc.reset_peak()
     select_str = ATOM_SELECTION if ATOM_SELECTION else "all"
-    start_calc = time.perf_counter()
     calc = rms.RMSD(universe, ref_frame=REFERENCE_FRAME, select=select_str)
+    tracemalloc.reset_peak()
+    start_calc = time.perf_counter()
     calc.run()
     values = calc.results.rmsd[:, 2].copy()
     calc_time = time.perf_counter() - start_calc

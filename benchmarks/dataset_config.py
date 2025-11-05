@@ -54,6 +54,14 @@ _register_dataset(
     top_rel="ubiquitin/topology.pdb",
 )
 
+_register_dataset(
+    key="ubiquitin99",
+    slug="ubiquitin99",
+    label="Ubiquitin 99",
+    traj_rel="ubiquitin/Q99.dcd",
+    top_rel="ubiquitin/topology.pdb",
+)
+
 
 def get_dataset_config(identifier: str) -> DatasetConfig:
     try:

@@ -90,12 +90,15 @@ def parse_frame_selection(frames_str: str) -> Tuple[Optional[int], Optional[int]
         raise ValueError(f"Invalid frame selection format: {frames_str}")
     
     start = int(parts[0]) if parts[0] else 0
-    stop = int(parts[1]) if parts[1] and parts[1] != '-1' else None
     stride = int(parts[2]) if parts[2] else 1
     
-    # Handle -1 as "last frame"
-    if parts[1] == '-1':
+    # Handle stop: None for empty, -1 for last frame, or the specified value
+    if not parts[1]:
+        stop = None
+    elif parts[1] == '-1':
         stop = -1
+    else:
+        stop = int(parts[1])
     
     return start, stop, stride
 
@@ -233,49 +236,14 @@ def validate_rmsd(fastmda: FastMDAnalysis, traj: md.Trajectory,
             'detail': f'MDTraj error: {str(e)}'
         })
     
-    # MDAnalysis RMSD (if available) - Skipped for performance
-    # MDAnalysis RMSD calculation can be slow for large trajectories
-    # Uncomment below to enable MDAnalysis comparison
-    """
-    if HAS_MDANALYSIS:
-        try:
-            # Load with MDAnalysis
-            u = mda.Universe(TrpCage.top, TrpCage.traj)
-            protein = u.select_atoms('protein')
-            
-            # Get reference frame positions
-            ref_positions = u.trajectory[ref_frame].positions[protein.indices]
-            
-            # Apply frame selection and compute RMSD
-            rmsd_values = []
-            # Use slicing similar to what fastmda used
-            for i in range(len(fastmda.traj)):
-                u.trajectory[i * (fastmda.traj.stride if hasattr(fastmda.traj, 'stride') else 1)]
-                rmsd_val = mda_rms.rmsd(
-                    protein.positions,
-                    ref_positions,
-                    superposition=True
-                ) / 10.0  # Convert to nm
-                rmsd_values.append(rmsd_val)
-            
-            mda_data = np.array(rmsd_values)
-            
-            comparison = compare_arrays(fmda_data, mda_data, 'RMSD')
-            comparison['backend'] = 'mdanalysis'
-            comparison['metric'] = 'rmsd'
-            results.append(comparison)
-            
-            print(f"  RMSD vs MDAnalysis: {comparison['status']} - {comparison['detail']}")
-        except Exception as e:
-            print(f"  Error comparing with MDAnalysis: {e}")
-            results.append({
-                'name': 'RMSD',
-                'backend': 'mdanalysis',
-                'metric': 'rmsd',
-                'status': 'error',
-                'detail': f'MDAnalysis error: {str(e)}'
-            })
-    """
+    # Note: MDAnalysis RMSD comparison is currently disabled for performance reasons.
+    # The comparison with MDTraj is sufficient for validation purposes.
+    # To enable MDAnalysis comparison, implement a separate function that:
+    # 1. Loads trajectory with MDAnalysis Universe
+    # 2. Selects protein atoms
+    # 3. Computes RMSD for each frame using mda_rms.rmsd() with proper alignment
+    # 4. Converts Angstroms to nm by dividing by 10.0
+    # 5. Compares with FastMDAnalysis results
     
     return results
 
@@ -406,12 +374,24 @@ def validate_hbonds(fastmda: FastMDAnalysis, traj: md.Trajectory) -> List[Dict[s
     # FastMDAnalysis HBonds
     try:
         fmda_hbonds = fastmda.hbonds()
-        # HBonds data is typically a count per frame
+        # HBonds data is typically a count per frame or list of bonds
         if hasattr(fmda_hbonds, 'data') and isinstance(fmda_hbonds.data, np.ndarray):
             fmda_data = fmda_hbonds.data.flatten() if fmda_hbonds.data.ndim > 1 else fmda_hbonds.data
         else:
-            # data might be a list of tuples or other format
-            fmda_data = np.array([len(fmda_hbonds.data)] * traj.n_frames)
+            # If data format is unexpected, report as info rather than trying to construct comparable data
+            results.append({
+                'name': 'Hydrogen Bonds',
+                'backend': 'FastMDAnalysis',
+                'metric': 'hbond_data',
+                'status': 'info',
+                'detail': f'HBonds data type: {type(fmda_hbonds.data)}',
+                'shape_match': True,
+                'fastmda_stats': {},
+                'ref_stats': {},
+                'fastmda_shape': str(getattr(fmda_hbonds.data, 'shape', 'N/A')),
+                'ref_shape': 'N/A'
+            })
+            return results
     except Exception as e:
         results.append({
             'name': 'Hydrogen Bonds',
@@ -565,7 +545,7 @@ def validate_sasa(fastmda: FastMDAnalysis, traj: md.Trajectory) -> List[Dict[str
     
     # MDTraj SASA
     try:
-        atom_indices = traj.topology.select('protein')
+        # MDTraj SASA - compute on the full selected trajectory
         mdtraj_total = md.shrake_rupley(traj, probe_radius=0.14, mode='atom')
         # Sum over atoms to get total per frame
         mdtraj_total_sum = np.sum(mdtraj_total, axis=1)

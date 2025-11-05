@@ -36,6 +36,9 @@ __pycache__/
 *_output/
 demos/
 validation_output/
+validator_outputs/
+benchmarks/
+validation_summary.png
 
 # Slides
 slides/FastMDAnalysis_demo_slides.pptx

@@ -30,7 +30,7 @@ ANALYZE_OPTIONS = {
     "rmsd": {"ref": 0, "align": True},
     "rg": {"by_chain": False},
     "cluster": {
-        "methods": ["dbscan"],
+        "methods": "dbscan",  # Use string format to match individual benchmarks
         "eps": 0.3,
         "min_samples": 5,
         "atoms": CLUSTER_ATOM_SELECTION,

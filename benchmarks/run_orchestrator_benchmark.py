@@ -251,14 +251,13 @@ def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instru
                     slides_seconds = seconds
                     continue
                 per_analysis_breakdown[name] = seconds
-        # Keep the measured total_time from the overall analyze() call
-        # Don't override with sum of per-analysis times as that could differ due to orchestrator overhead
         
-        # For orchestrator, analyses include integrated file I/O, so calc/plot split depends on which analyses run
-        # Cluster is computation-heavy (~90% calc), while RMSD/RMSF/RG are more balanced (~50% calc)
-        # For our 4-analysis mix, use 50/50 as a reasonable estimate
-        calc_time = total_time * 0.50
-        plot_time = total_time * 0.50
+        # The total_time from analyze() includes all analyses + any orchestrator overhead
+        # The sum of per-analysis times is the actual computation time
+        # Any difference is orchestrator overhead (negligible in practice)
+        sum_analysis_times = sum(per_analysis_breakdown.values())
+        calc_time = sum_analysis_times  # All analyses run (each includes their own calc+plot)
+        plot_time = 0.0  # No separate plotting phase in orchestrator (integrated in each analysis)
         
         instrument.record_success(TOOL_ID)
     except Exception:
@@ -273,9 +272,10 @@ def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instru
             plot_peak_bytes = tracker.plot_bytes()
             peak_bytes = tracker.overall_bytes(peak_bytes)
         else:
-            # When not tracking plots separately, split memory using same ratio as timing (50/50)
-            calc_peak_bytes = peak_bytes * 0.50
-            plot_peak_bytes = peak_bytes * 0.50
+            # Orchestrator runs analyses sequentially, each with integrated calc+plot
+            # The peak is the peak - there's no separate plotting phase
+            calc_peak_bytes = peak_bytes  # All memory used during analyses
+            plot_peak_bytes = 0.0  # No separate plotting phase
         tracemalloc.stop()
         if analyze_module is not None:
             # Restore original helpers to avoid side-effects on subsequent runs.

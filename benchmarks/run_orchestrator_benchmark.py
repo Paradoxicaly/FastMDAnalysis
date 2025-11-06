@@ -239,6 +239,10 @@ def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instru
         # This matches the methodology of individual benchmarks for apples-to-apples comparison
         start_total = time.perf_counter()
         
+        # Track peak memory separately for calc and plot phases across ALL analyses
+        calc_peak_mem = 0
+        plot_peak_mem = 0
+        
         for analysis_name in ANALYSES:
             # Create analysis based on type
             if analysis_name == "rmsd":
@@ -291,6 +295,10 @@ def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instru
             calc_time_single = time.perf_counter() - start_calc
             per_analysis_calc_times[analysis_name] = calc_time_single
             
+            # Track peak memory during this calc phase
+            calc_peak_this = tracemalloc.get_traced_memory()[1]
+            calc_peak_mem = max(calc_peak_mem, calc_peak_this)
+            
             # Restore methods
             for method_name, original in patched_methods.items():
                 setattr(analysis, method_name, original)
@@ -314,6 +322,10 @@ def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instru
             plot_time_single = time.perf_counter() - start_plot
             per_analysis_plot_times[analysis_name] = plot_time_single
             
+            # Track peak memory during this plot phase
+            plot_peak_this = tracemalloc.get_traced_memory()[1]
+            plot_peak_mem = max(plot_peak_mem, plot_peak_this)
+            
             per_analysis_breakdown[analysis_name] = calc_time_single + plot_time_single
         
         total_time = time.perf_counter() - start_total
@@ -329,15 +341,11 @@ def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instru
     finally:
         if tracker:
             tracker.observe()
-        peak_bytes = tracemalloc.get_traced_memory()[1]
-        if tracker:
-            calc_peak_bytes = tracker.calc_bytes(peak_bytes)
-            plot_peak_bytes = tracker.plot_bytes()
-            peak_bytes = tracker.overall_bytes(peak_bytes)
-        else:
-            # All memory is attributed to computation (includes integrated plotting per analysis)
-            calc_peak_bytes = peak_bytes
-            plot_peak_bytes = 0.0
+        
+        # Use the tracked peak memory values from calc and plot phases
+        calc_peak_bytes = calc_peak_mem
+        plot_peak_bytes = plot_peak_mem
+        peak_bytes = max(calc_peak_mem, plot_peak_mem)
         tracemalloc.stop()
         if analyze_module is not None:
             # Restore original helpers to avoid side-effects on subsequent runs.

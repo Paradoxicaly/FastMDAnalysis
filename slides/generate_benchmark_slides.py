@@ -345,6 +345,57 @@ def add_combined_overview_slide(prs: Presentation, overview_dir: Path) -> None:
         slide.shapes.add_picture(str(path), left, top, width=image_width)
 
 
+def add_aggregated_overview_slide(prs: Presentation, overview_dir: Path) -> None:
+    """Add a single slide showing aggregated metrics (sum of individual benchmarks).
+    
+    This is different from the combined_overview_slide which uses orchestrator data.
+    This slide shows the aggregated LOC as 8 lines (same as orchestrator but semantically
+    different - aggregated means sum of individual runs, not single analyze() call).
+    
+    Charts: same 4 as combined overview, but title indicates aggregated metrics.
+    """
+    files = [
+        ("External module dependencies", overview_dir / "external_modules.png"),
+        ("Snippet lines of code (calc vs plot)", overview_dir / "loc_totals.png"),
+        ("Runtime footprint overview", overview_dir / "runtime_totals.png"),
+        ("Peak memory footprint overview", overview_dir / "peak_mem_totals.png"),
+    ]
+    # Only add the slide if at least one of the files exists
+    if not any(p.exists() for _, p in files):
+        return
+
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    title_box = slide.shapes.add_textbox(Inches(0.5), Inches(0.2), Inches(9.0), Inches(0.6))
+    title_frame = title_box.text_frame
+    title_frame.clear()
+    title_run = title_frame.paragraphs[0].add_run()
+    title_run.text = "Aggregated Overview: Dependencies, LOC, Runtime, Memory"
+    title_run.font.bold = True
+    title_run.font.size = Pt(24)
+
+    # Add a note explaining aggregated metrics
+    note_box = slide.shapes.add_textbox(Inches(0.5), Inches(0.7), Inches(9.0), Inches(0.25))
+    note_frame = note_box.text_frame
+    note_frame.clear()
+    note_para = note_frame.paragraphs[0]
+    note_para.text = "(Aggregated metrics: sum of 4 individual benchmark runs - RMSD, RMSF, RG, Cluster)"
+    note_para.font.size = Pt(11)
+    note_para.font.italic = True
+
+    positions = [
+        (Inches(0.5), Inches(1.05)),
+        (Inches(5.0), Inches(1.05)),
+        (Inches(0.5), Inches(4.25)),
+        (Inches(5.0), Inches(4.25)),
+    ]
+    image_width = Inches(4.0)
+
+    for (_caption, path), (left, top) in zip(files, positions):
+        if not path.exists():
+            continue
+        slide.shapes.add_picture(str(path), left, top, width=image_width)
+
+
 def _count_noncomment_lines(path: Path) -> int:
     if not path.exists():
         return 0
@@ -889,6 +940,13 @@ def build_presentation(output_path: Path) -> None:
     except Exception:
         # Non-fatal: if something goes wrong adding the combined slide,
         # continue building the rest of the presentation.
+        pass
+
+    # Add aggregated overview slide (sum of individual benchmarks, not orchestrator)
+    try:
+        add_aggregated_overview_slide(prs, OVERVIEW_DIR)
+    except Exception:
+        # Non-fatal: continue if something fails while adding aggregated slide
         pass
 
     # Add a combined instrumentation slide containing instrumentation_overview,

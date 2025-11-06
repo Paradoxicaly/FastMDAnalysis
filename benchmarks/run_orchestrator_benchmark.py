@@ -167,7 +167,7 @@ def _set_dataset(slug: str) -> None:
         FRAME_SLICE = (0, FRAME_STRIDE * MAX_FRAMES, FRAME_STRIDE)
 
 
-def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instrumentation) -> RunMetrics:
+def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instrumentation, slides_enabled: bool = False) -> RunMetrics:
     if rep_dir.exists():
         shutil.rmtree(rep_dir)
     rep_dir.mkdir(parents=True, exist_ok=True)
@@ -176,7 +176,7 @@ def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instru
     analyze_module = None
     original_slide_show = None
     original_gather_figures = None
-    if SLIDES_ENABLED:
+    if slides_enabled:
         from fastmdanalysis.analysis import analyze as analyze_module  # noqa: WPS433
 
         tracker = _PlottingMemoryTracker()
@@ -232,7 +232,7 @@ def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instru
         results = fastmda.analyze(
             include=ANALYSES,
             options=ANALYZE_OPTIONS,
-            slides=SLIDES_ENABLED,
+            slides=slides_enabled,
             output=rep_dir,
             verbose=False,
         )
@@ -250,12 +250,12 @@ def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instru
                     continue
                 per_analysis_breakdown[name] = seconds
         
-        # The total_time from analyze() includes all analyses + any orchestrator overhead
-        # The sum of per-analysis times is the actual computation time
-        # Any difference is orchestrator overhead (negligible in practice)
+        # Each per-analysis time includes both computation and plotting (file I/O + PNG generation)
+        # Since we cannot easily separate these phases in the orchestrator context,
+        # we report all time as computation (which includes integrated plotting per analysis)
         sum_analysis_times = sum(per_analysis_breakdown.values())
-        calc_time = sum_analysis_times  # All analyses run (each includes their own calc+plot)
-        plot_time = 0.0  # No separate plotting phase in orchestrator (integrated in each analysis)
+        calc_time = sum_analysis_times
+        plot_time = 0.0
         
         instrument.record_success(TOOL_ID)
     except Exception:
@@ -270,10 +270,9 @@ def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instru
             plot_peak_bytes = tracker.plot_bytes()
             peak_bytes = tracker.overall_bytes(peak_bytes)
         else:
-            # Orchestrator runs analyses sequentially, each with integrated calc+plot
-            # The peak is the peak - there's no separate plotting phase
-            calc_peak_bytes = peak_bytes  # All memory used during analyses
-            plot_peak_bytes = 0.0  # No separate plotting phase
+            # All memory is attributed to computation (includes integrated plotting per analysis)
+            calc_peak_bytes = peak_bytes
+            plot_peak_bytes = 0.0
         tracemalloc.stop()
         if analyze_module is not None:
             # Restore original helpers to avoid side-effects on subsequent runs.
@@ -294,7 +293,7 @@ def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instru
     )
 
 
-def _write_outputs(metrics: list[RunMetrics], instrument: Instrumentation, config) -> None:
+def _write_outputs(metrics: list[RunMetrics], instrument: Instrumentation, config, slides_enabled: bool = False) -> None:
     summary = {TOOL_ID: _summarize(metrics)}
     loc_metrics = _collect_loc_metrics()
     summary[TOOL_ID]["loc"] = loc_metrics
@@ -431,7 +430,7 @@ def _write_outputs(metrics: list[RunMetrics], instrument: Instrumentation, confi
             "dataset_label": DATASET_LABEL,
             "repeats": len(metrics),
             "analyses": list(ANALYSES),
-            "slides": SLIDES_ENABLED,
+            "slides": slides_enabled,
         },
         "summary": {
             TOOL_ID: {
@@ -484,6 +483,11 @@ def main(argv: list[str] | None = None) -> None:
         default=REPEATS,
         help="Number of times to repeat the single-run benchmark.",
     )
+    parser.add_argument(
+        "--slides",
+        action="store_true",
+        help="Enable slide deck generation.",
+    )
     args = parser.parse_args(argv)
 
     _set_dataset(args.dataset)
@@ -514,9 +518,9 @@ def main(argv: list[str] | None = None) -> None:
     metrics: list[RunMetrics] = []
     for idx in range(1, args.repeats + 1):
         rep_dir = OUTPUT_ROOT / TOOL_ID / f"rep_{idx:02d}"
-        metrics.append(_measure_single_run(config.traj, config.top, rep_dir, instrument))
+        metrics.append(_measure_single_run(config.traj, config.top, rep_dir, instrument, args.slides))
 
-    _write_outputs(metrics, instrument, config)
+    _write_outputs(metrics, instrument, config, args.slides)
     print(f"[+] Wrote orchestrator benchmark results to {OUTPUT_ROOT}")
 
 

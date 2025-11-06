@@ -8,6 +8,7 @@ import sys
 import time
 import tracemalloc
 import shutil
+import types
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -216,7 +217,14 @@ def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instru
     calc_peak_bytes = 0
     plot_peak_bytes = 0
     per_analysis_breakdown: dict[str, float] = {}
+    per_analysis_calc_times: dict[str, float] = {}
+    per_analysis_plot_times: dict[str, float] = {}
     slides_seconds = 0.0
+    
+    def _noop_method(self, *args, **kwargs):
+        """No-op method to disable plotting/saving during timing."""
+        pass
+    
     try:
         # Pre-load FastMDAnalysis object BEFORE timing starts (like individual benchmarks)
         # This excludes trajectory loading overhead for fair "apples-to-apples" comparison
@@ -227,35 +235,92 @@ def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instru
         tracemalloc.stop()
         tracemalloc.start()
         
-        # NOW start timing the actual analyze() call
+        # Run each analysis separately with plotting disabled during computation timing
+        # This matches the methodology of individual benchmarks for apples-to-apples comparison
         start_total = time.perf_counter()
-        results = fastmda.analyze(
-            include=ANALYSES,
-            options=ANALYZE_OPTIONS,
-            slides=slides_enabled,
-            output=rep_dir,
-            verbose=False,
-        )
-        total_time = time.perf_counter() - start_total
-        if tracker:
-            tracker.observe()
-        _, peak = tracemalloc.get_traced_memory()
-        # Extract per-analysis timing (each includes computation + its own plotting)
-        if isinstance(results, dict):
-            for name, result in results.items():
-                seconds = float(getattr(result, "seconds", 0.0) or 0.0)
-                if name == "slides":
-                    # Slides should not be included in benchmark
-                    slides_seconds = seconds
-                    continue
-                per_analysis_breakdown[name] = seconds
         
-        # Each per-analysis time includes both computation and plotting (file I/O + PNG generation)
-        # Since we cannot easily separate these phases in the orchestrator context,
-        # we report all time as computation (which includes integrated plotting per analysis)
-        sum_analysis_times = sum(per_analysis_breakdown.values())
-        calc_time = sum_analysis_times
-        plot_time = 0.0
+        for analysis_name in ANALYSES:
+            # Create analysis based on type
+            if analysis_name == "rmsd":
+                from fastmdanalysis.analysis import rmsd as fast_rmsd
+                analysis = fast_rmsd.RMSDAnalysis(
+                    fastmda.traj,
+                    reference_frame=ANALYZE_OPTIONS["rmsd"]["ref"],
+                    align=ANALYZE_OPTIONS["rmsd"]["align"],
+                    output=str(rep_dir / analysis_name),
+                )
+            elif analysis_name == "rmsf":
+                from fastmdanalysis.analysis import rmsf as fast_rmsf
+                analysis = fast_rmsf.RMSFAnalysis(
+                    fastmda.traj,
+                    output=str(rep_dir / analysis_name),
+                )
+            elif analysis_name == "rg":
+                from fastmdanalysis.analysis import rg as fast_rg
+                analysis = fast_rg.RGAnalysis(
+                    fastmda.traj,
+                    by_chain=ANALYZE_OPTIONS["rg"]["by_chain"],
+                    output=str(rep_dir / analysis_name),
+                )
+            elif analysis_name == "cluster":
+                from fastmdanalysis.analysis import cluster as fast_cluster
+                analysis = fast_cluster.ClusterAnalysis(
+                    fastmda.traj,
+                    methods=ANALYZE_OPTIONS["cluster"]["methods"],
+                    eps=ANALYZE_OPTIONS["cluster"]["eps"],
+                    min_samples=ANALYZE_OPTIONS["cluster"]["min_samples"],
+                    atoms=ANALYZE_OPTIONS["cluster"]["atoms"],
+                    output=str(rep_dir / analysis_name),
+                )
+            else:
+                continue
+            
+            # Patch plotting/saving methods (like individual benchmarks)
+            patched_methods = {}
+            for method_name in dir(analysis):
+                if method_name.startswith("_save_") or method_name.startswith("_plot_") or method_name == "plot":
+                    if hasattr(analysis, method_name) and callable(getattr(analysis, method_name)):
+                        original = getattr(analysis, method_name)
+                        patched_methods[method_name] = original
+                        setattr(analysis, method_name, types.MethodType(_noop_method, analysis))
+            
+            # Time computation only (with plotting disabled)
+            tracemalloc.reset_peak()
+            start_calc = time.perf_counter()
+            analysis.run()
+            calc_time_single = time.perf_counter() - start_calc
+            per_analysis_calc_times[analysis_name] = calc_time_single
+            
+            # Restore methods
+            for method_name, original in patched_methods.items():
+                setattr(analysis, method_name, original)
+            
+            # Separately time plotting/saving (matching individual benchmarks)
+            tracemalloc.reset_peak()
+            start_plot = time.perf_counter()
+            # Call save_data and plot methods that were skipped
+            if hasattr(analysis, '_save_data') and callable(analysis._save_data):
+                try:
+                    # Save data files
+                    if hasattr(analysis, 'data'):
+                        analysis._save_data(analysis.data, f"{analysis_name}_data")
+                except Exception:
+                    pass
+            if hasattr(analysis, 'plot') and callable(analysis.plot):
+                try:
+                    analysis.plot()
+                except Exception:
+                    pass
+            plot_time_single = time.perf_counter() - start_plot
+            per_analysis_plot_times[analysis_name] = plot_time_single
+            
+            per_analysis_breakdown[analysis_name] = calc_time_single + plot_time_single
+        
+        total_time = time.perf_counter() - start_total
+        
+        # Sum up calc and plot times separately
+        calc_time = sum(per_analysis_calc_times.values())
+        plot_time = sum(per_analysis_plot_times.values())
         
         instrument.record_success(TOOL_ID)
     except Exception:

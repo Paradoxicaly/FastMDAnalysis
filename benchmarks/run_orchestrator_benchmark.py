@@ -229,7 +229,6 @@ def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instru
         
         # NOW start timing the actual analyze() call
         start_total = time.perf_counter()
-        start_calc = time.perf_counter()
         results = fastmda.analyze(
             include=ANALYSES,
             options=ANALYZE_OPTIONS,
@@ -237,7 +236,6 @@ def _measure_single_run(traj: Path, top: Path, rep_dir: Path, instrument: Instru
             output=rep_dir,
             verbose=False,
         )
-        calc_time = time.perf_counter() - start_calc
         total_time = time.perf_counter() - start_total
         if tracker:
             tracker.observe()

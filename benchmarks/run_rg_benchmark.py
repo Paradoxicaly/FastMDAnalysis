@@ -767,8 +767,8 @@ def main(argv: list[str] | None = None) -> None:
     # Determine frame slicing based on dataset
     frame_slice = None
     if '_500' in DATASET_SLUG:
-        # Use first 500 frames
-        frame_slice = slice(0, 500)
+        # Use every 10th frame (standardized stride for 500-frame benchmarks)
+        frame_slice = slice(0, None, 10)
     elif '_5000' in DATASET_SLUG:
         # Use all frames (no slicing for 5000 frame datasets)
         frame_slice = None
@@ -779,8 +779,8 @@ def main(argv: list[str] | None = None) -> None:
         mdtraj_traj = mdtraj_traj[frame_slice]
         fast_traj = mdtraj_traj
         universe = mda.Universe(str(TOPOLOGY_FILE), str(TRAJ_FILE))
-        # Slice universe by selecting specific frames
-        universe.trajectory[0:500]
+        # Slice universe by selecting every 10th frame
+        universe.trajectory[::10]
     else:
         mdtraj_traj = md.load(str(TRAJ_FILE), top=str(TOPOLOGY_FILE))
         fast_traj = mdtraj_traj

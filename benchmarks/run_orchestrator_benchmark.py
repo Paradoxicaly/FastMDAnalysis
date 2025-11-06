@@ -157,8 +157,8 @@ def _set_dataset(slug: str) -> None:
     
     # Adjust FRAME_SLICE based on dataset
     if '_500' in slug:
-        # For 500 frame datasets: use first 500 frames with no stride
-        FRAME_SLICE = (0, 500, 1)
+        # For 500 frame datasets: use every 10th frame (standardized stride)
+        FRAME_SLICE = (0, -1, 10)
     elif '_5000' in slug:
         # For 5000 frame datasets: use all frames with no stride
         FRAME_SLICE = (0, -1, 1)

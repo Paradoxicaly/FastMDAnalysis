@@ -910,20 +910,29 @@ def main(argv: list[str] | None = None) -> None:
     # Determine frame slicing based on dataset
     frame_limit = None
     if '_500' in DATASET_SLUG:
-        # Use first 500 frames
-        frame_limit = 500
+        # Use every 10th frame (standardized stride for 500-frame benchmarks)
+        frame_limit = None  # Don't limit, use stride instead
+        use_stride_only = True
     elif '_5000' in DATASET_SLUG:
         # Use all frames (no limiting for 5000 frame datasets)
         frame_limit = None
+        use_stride_only = False
+    else:
+        frame_limit = None
+        use_stride_only = False
     
     # Load and slice trajectories
     mdtraj_full = md.load(str(TRAJ_FILE), top=str(TOPOLOGY_FILE))
     
-    # Apply frame limit before striding if specified
-    if frame_limit and mdtraj_full.n_frames > frame_limit:
-        mdtraj_full = mdtraj_full[:frame_limit]
-    
-    frame_indices = np.arange(0, mdtraj_full.n_frames, FRAME_STRIDE)
+    # For 500-frame benchmarks, use every 10th frame from the full trajectory
+    if use_stride_only:
+        frame_indices = np.arange(0, mdtraj_full.n_frames, 10)
+    else:
+        # Apply frame limit before striding if specified
+        if frame_limit and mdtraj_full.n_frames > frame_limit:
+            mdtraj_full = mdtraj_full[:frame_limit]
+        
+        frame_indices = np.arange(0, mdtraj_full.n_frames, FRAME_STRIDE)
     if frame_indices.size == 0:
         raise RuntimeError("No frames selected for clustering benchmark; adjust FRAME_STRIDE or dataset")
     if frame_indices.size > max_frames:

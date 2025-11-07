@@ -729,17 +729,24 @@ def validate_clustering(fastmda: FastMDAnalysis, traj: md.Trajectory) -> List[Di
                 sklearn_labels_raw = db.fit_predict(D)
                 # FastMDAnalysis has custom relabeling for DBSCAN
                 # We compare the raw labels (before relabeling) which should match exactly
-                if 'labels_raw' in data:
-                    fmda_labels_raw = data['labels_raw']
-                    comparison = compare_arrays(fmda_labels_raw, sklearn_labels_raw, f'Clustering ({method})')
-                    comparison['backend'] = 'sklearn'
-                    comparison['metric'] = f'cluster_{method}'
-                    results.append(comparison)
-                    print(f"  Clustering ({method}): {comparison['status']} - {comparison['detail']}")
+                if 'labels_raw' not in data:
+                    # This should not happen - FastMDAnalysis always stores labels_raw for DBSCAN
+                    results.append({
+                        'name': f'Clustering ({method})',
+                        'backend': 'sklearn',
+                        'metric': f'cluster_{method}',
+                        'status': 'error',
+                        'detail': 'DBSCAN labels_raw not found in FastMDAnalysis results'
+                    })
                     continue
-                else:
-                    # If we don't have raw labels, skip detailed comparison
-                    sklearn_labels = sklearn_labels_raw
+                
+                fmda_labels_raw = data['labels_raw']
+                comparison = compare_arrays(fmda_labels_raw, sklearn_labels_raw, f'Clustering ({method})')
+                comparison['backend'] = 'sklearn'
+                comparison['metric'] = f'cluster_{method}'
+                results.append(comparison)
+                print(f"  Clustering ({method}): {comparison['status']} - {comparison['detail']}")
+                continue
                     
             elif method == 'hierarchical':
                 # FastMDAnalysis uses ward linkage and fcluster

@@ -1,0 +1,91 @@
+# FastMDAnalysis Options Example
+# This file demonstrates the new permissive options passthrough feature
+# with alias mapping and MDTraj/scikit-learn compatible parameters.
+#
+# Usage:
+#   fastmda analyze -traj trajectory.dcd -top topology.pdb --options options_example.yaml
+
+# RMSD Analysis
+# Aliases: ref/reference → reference_frame, atoms/selection/atom_indices → atoms
+rmsd:
+  ref: 0                        # Reference frame index (alias for reference_frame)
+  align: true                   # Perform optimal superposition (default: true)
+  atoms: "protein and name CA"  # Atom selection for RMSD calculation
+
+# RMSF Analysis
+# Aliases: atoms/selection/atom_indices → atoms
+rmsf:
+  atoms: "protein and name CA"  # Atom selection
+  per_residue: true             # Aggregate per-atom RMSF to per-residue (default: false)
+
+# Radius of Gyration Analysis
+# Aliases: atoms/selection/atom_indices → atoms
+rg:
+  atoms: "protein"              # Atom selection
+  mass_weighted: false          # Use mass-weighted RG (MDTraj default is true)
+
+# Hydrogen Bonds Analysis
+# Aliases: distance_cutoff_nm → distance, angle_cutoff_deg → angle
+hbonds:
+  distance_cutoff_nm: 0.25      # Distance cutoff in nm (alias for distance)
+  angle_cutoff_deg: 120         # Angle cutoff in degrees (alias for angle)
+  sidechain_only: false         # Only sidechain-sidechain H-bonds
+  exclude_water: true           # Exclude water molecules
+  periodic: true                # Use periodic boundary conditions
+
+# Secondary Structure Analysis
+# Aliases: atoms/selection/atom_indices → atoms
+ss:
+  algorithm: dssp               # Algorithm for SS assignment (currently only DSSP)
+  atoms: "protein"              # Atom selection
+  # mkdssp_path: "/path/to/mkdssp"  # Optional: custom path to mkdssp executable
+
+# Solvent Accessible Surface Area
+# Aliases: probe_radius_nm → probe_radius, atoms/selection/atom_indices → atoms
+sasa:
+  probe_radius_nm: 0.14         # Probe radius in nm (alias for probe_radius)
+  n_sphere_points: 960          # Number of sphere points for calculation
+  atoms: "protein"              # Atom selection
+
+# Dimensionality Reduction
+# Aliases: method → methods, perplexity → tsne_perplexity, n_iter → max_iter, dissimilarity → metric
+dimred:
+  method: tsne                  # Method: pca, mds, or tsne (alias for methods)
+  n_components: 2               # Number of components (default: 2)
+  atoms: "protein and name CA"  # Atom selection
+  
+  # t-SNE specific options
+  perplexity: 30                # t-SNE perplexity (alias for tsne_perplexity)
+  max_iter: 1000                # Maximum iterations (alias: n_iter)
+  random_state: 42              # Random seed for reproducibility
+  
+  # MDS specific options (when method: mds)
+  # metric: euclidean           # Metric for MDS (alias: dissimilarity)
+  # Options: euclidean, precomputed
+
+# Clustering Analysis
+# Aliases: method → methods, linkage → linkage_method
+cluster:
+  method: kmeans                # Method: kmeans, dbscan, or hierarchical (alias for methods)
+  n_clusters: 6                 # Number of clusters (for kmeans/hierarchical)
+  atoms: "protein and name CA"  # Atom selection
+  
+  # Common options
+  random_state: 42              # Random seed (for kmeans)
+  
+  # KMeans specific options
+  n_init: "auto"                # Number of initializations (default: 10, or "auto")
+  
+  # Hierarchical specific options
+  linkage: ward                 # Linkage method (alias for linkage_method)
+  # Options: ward, complete, average, single
+  
+  # DBSCAN specific options (when method: dbscan)
+  # eps: 0.4                    # Epsilon (distance threshold) in nm
+  # min_samples: 5              # Minimum samples per cluster
+
+# Notes:
+# - All analyses support the 'atoms', 'selection', or 'atom_indices' parameter
+# - Use --strict flag with CLI to raise errors for unknown options (default: log warnings)
+# - Aliases are interchangeable: use whichever style you prefer
+# - Mix and match canonical names with aliases in the same configuration

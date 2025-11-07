@@ -15,6 +15,7 @@
 - Automatically generate **publication-quality figures** with customizable styling for immediate use  
 - Seamlessly switch between **Python API** for advanced workflows and **CLI** for rapid batch processing
 - **Scalable workflows** that handle everything from quick exploratory analysis to large-scale production runs
+- **Permissive options passthrough** with MDTraj/scikit-learn compatible parameter names and alias mapping
 
 <!-- Perform a variety of MD trajectory analyses with a single line of code -->
 <!-- Simplify your workflow by loading a trajectory once (with options for frame and atom selection) and then performing multiple analyses without repeating input file details. --> 
@@ -126,12 +127,31 @@ Provide per-analysis keyword arguments in a single file. CLI and Python API shar
 ```yaml
 # options.yaml
 rmsd:
-  ref: 0
+  ref: 0                        # alias for reference_frame
+  atoms: "protein and name CA"  # atom selection
+  align: true
+
+rmsf:
+  selection: "protein and name CA"  # alias for atoms
+  per_residue: true                 # aggregate to per-residue
+
 cluster:
-  methods: [kmeans, hierarchical]
+  method: kmeans                # alias for methods (singular)
   n_clusters: 5
+  random_state: 42
 ```
 JSON is also supported. If using YAML, ensure PyYAML is installed.
+
+**NEW: Permissive Options & Aliases**
+
+FastMDAnalysis now supports MDTraj and scikit-learn compatible parameter names with automatic alias mapping:
+- Use `ref` or `reference` instead of `reference_frame`
+- Use `selection` or `atom_indices` instead of `atoms`
+- Use `method` (singular) instead of `methods` for dimred/cluster
+- Use `distance_cutoff_nm`, `probe_radius_nm`, etc. with automatic conversion
+- Enable `--strict` mode to validate all options (default: permissive with warnings)
+
+See [`docs/OPTIONS_PASSTHROUGH.md`](docs/OPTIONS_PASSTHROUGH.md) and [`examples/options_example.yaml`](examples/options_example.yaml) for complete documentation.
 
 **Slides:**
 - ``--slides`` creates ``fastmda_slides_<ddmmyy.HHMM>.pptx`` in the current working directory.

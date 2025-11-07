@@ -117,7 +117,7 @@ def test_cli_analyze_minimal(tmp_path: Path, dataset_paths):
 
 @pytest.mark.cli
 def test_cli_analyze_slides_with_custom_output_dir(tmp_path: Path, dataset_paths):
-    """Test CLI with --slides and custom output directory."""
+    """Test CLI with --slides respects custom output directory specified via -o."""
     pytest.importorskip("pptx")
     
     traj, top = dataset_paths
@@ -134,11 +134,15 @@ def test_cli_analyze_slides_with_custom_output_dir(tmp_path: Path, dataset_paths
     proc = _run_cli_direct(args, cwd=tmp_path)
     assert proc.returncode == 0, proc.stdout
     
-    # Current behavior: slide deck goes to analyze_output regardless of -o
-    analyze_output = tmp_path / "analyze_output"
-    decks = list(analyze_output.glob("fastmda_slides_*.pptx"))
+    # Expected behavior: slide deck should be in the custom output directory
+    decks = list(custom_outdir.glob("fastmda_slides_*.pptx"))
     
-    assert decks, "Expected slide deck in analyze_output (current behavior)"
+    assert decks, f"Expected slide deck in custom output directory {custom_outdir}"
+    assert decks[0].stat().st_size > 0, "Slide deck file should not be empty"
+    
+    # Verify analysis outputs are also in the custom directory
+    assert (custom_outdir / "rmsd").exists(), "RMSD output should be in custom directory"
+    assert (custom_outdir / "rg").exists(), "RG output should be in custom directory"
 
 
 @pytest.mark.cli

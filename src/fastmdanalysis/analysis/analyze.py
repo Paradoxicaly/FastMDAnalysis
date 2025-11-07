@@ -214,14 +214,29 @@ def run(
     verbose: bool = True,
     slides: Optional[Union[bool, str, Path]] = None,
     output: Optional[Union[str, Path]] = None,
+    strict: bool = False,
 ) -> Dict[str, AnalysisResult]:
     """
     Execute multiple analyses on the current FastMDAnalysis instance and
     collect all generated outputs into a single directory.
+    
+    Parameters
+    ----------
+    strict : bool
+        If True, raise errors for unknown options in analysis calls.
+        If False, log warnings (default).
     """
     available = _discover_available(self)
     plan = _final_list(available, include, exclude)
     opts = _validate_options(options)
+    
+    # Inject strict mode into all analysis options
+    if strict:
+        for analysis in plan:
+            if analysis in opts:
+                opts[analysis]["strict"] = True
+            else:
+                opts[analysis] = {"strict": True}
 
     # Inject cluster defaults so kmeans & hierarchical run by default
     _inject_cluster_defaults(self, opts, plan)
@@ -367,6 +382,7 @@ def analyze(
     verbose: bool = True,
     slides: Optional[Union[bool, str, Path]] = None,
     output: Optional[Union[str, Path]] = None,
+    strict: bool = False,
 ) -> Dict[str, AnalysisResult]:
     """Public façade so callers can do: fastmda.analyze(...)"""
     return run(
@@ -378,4 +394,5 @@ def analyze(
         verbose=verbose,
         slides=slides,
         output=output,
+        strict=strict,
     )

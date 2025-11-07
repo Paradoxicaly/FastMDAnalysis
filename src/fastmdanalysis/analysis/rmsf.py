@@ -26,6 +26,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 from .base import BaseAnalysis, AnalysisError
+from ..utils.options import OptionsForwarder
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +44,22 @@ class RMSFAnalysis(BaseAnalysis):
     """
     Per-atom RMSF analysis with a readable, numeric-only x-axis (atom index).
     """
+    
+    # Alias mappings for permissive options
+    _ALIASES = {
+        "atom_indices": "atoms",
+        "selection": "atoms",
+        "reference": "reference_frame",
+    }
 
-    def __init__(self, trajectory: md.Trajectory, atoms: Optional[str] = None, **kwargs):
+    def __init__(
+        self, 
+        trajectory: md.Trajectory, 
+        atoms: Optional[str] = None, 
+        per_residue: bool = False,
+        strict: bool = False,
+        **kwargs
+    ):
         """
         Parameters
         ----------
@@ -52,11 +67,37 @@ class RMSFAnalysis(BaseAnalysis):
             MDTraj trajectory to analyze.
         atoms : str or None
             MDTraj selection string (e.g., "protein and name CA"). If None, all atoms are used.
+            Aliases: atom_indices, selection
+        per_residue : bool
+            If True, aggregate per-atom RMSF to per-residue (mean over atoms in each residue).
+        strict : bool
+            If True, raise errors for unknown options. If False, log warnings.
         kwargs : dict
             Passed through to BaseAnalysis (e.g., output).
         """
-        super().__init__(trajectory, **kwargs)
+        # Apply alias mapping
+        analysis_opts = {
+            "atoms": atoms,
+            "per_residue": per_residue,
+            "strict": strict,
+        }
+        analysis_opts.update(kwargs)
+        
+        forwarder = OptionsForwarder(aliases=self._ALIASES, strict=strict)
+        resolved = forwarder.apply_aliases(analysis_opts)
+        
+        # Extract known parameters
+        atoms = resolved.get("atoms", None)
+        per_residue = resolved.get("per_residue", False)
+        
+        # Pass remaining to BaseAnalysis
+        base_kwargs = {k: v for k, v in resolved.items() 
+                      if k not in ("atoms", "per_residue", "strict", "reference_frame")}
+        
+        super().__init__(trajectory, **base_kwargs)
         self.atoms: Optional[str] = atoms
+        self.per_residue: bool = bool(per_residue)
+        self.strict = strict
 
         # Populated during run()
         self.data: Optional[np.ndarray] = None              # shape (N, 1)
@@ -70,6 +111,7 @@ class RMSFAnalysis(BaseAnalysis):
         -------
         dict
             {"rmsf": (N, 1) array of per-atom RMSF values in nm}
+            If per_residue=True, also includes {"rmsf_per_residue": (R, 1) array}
         """
         try:
             # Atom selection (global indices)
@@ -89,6 +131,21 @@ class RMSFAnalysis(BaseAnalysis):
             rmsf_values = md.rmsf(subtraj, ref)  # shape (N,)
             self.data = np.asarray(rmsf_values, dtype=float).reshape(-1, 1)
             self.results = {"rmsf": self.data}
+
+            # Per-residue aggregation if requested
+            if self.per_residue:
+                atom_to_residue = np.array([a.residue.index for a in subtraj.topology.atoms], dtype=int)
+                n_residues = int(max(atom_to_residue) + 1) if atom_to_residue.size else 0
+                per_residue_rmsf = np.zeros(n_residues, dtype=float)
+                for r in range(n_residues):
+                    mask = (atom_to_residue == r)
+                    if np.any(mask):
+                        per_residue_rmsf[r] = np.mean(rmsf_values[mask])
+                
+                self.results["rmsf_per_residue"] = per_residue_rmsf.reshape(-1, 1)
+                self._save_data(per_residue_rmsf.reshape(-1, 1), "rmsf_per_residue", 
+                              header="rmsf_per_residue_nm", fmt="%.6f")
+                logger.info("RMSF: per-residue aggregation computed (%d residues)", n_residues)
 
             # Save data and a default plot
             self._save_data(self.data, "rmsf")

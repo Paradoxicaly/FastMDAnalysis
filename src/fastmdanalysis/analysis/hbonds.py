@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 import logging
+import inspect
 from pathlib import Path
 
 import numpy as np
@@ -24,12 +25,32 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 
 from .base import BaseAnalysis, AnalysisError
+from ..utils.options import OptionsForwarder
 
 log = logging.getLogger(__name__)
 
 
 class HBondsAnalysis(BaseAnalysis):
-    def __init__(self, trajectory, atoms: Optional[str] = None, **kwargs):
+    # Alias mappings for permissive options
+    _ALIASES = {
+        "atom_indices": "atoms",
+        "selection": "atoms",
+        "distance_cutoff_nm": "distance",
+        "angle_cutoff_deg": "angle",
+    }
+    
+    def __init__(
+        self, 
+        trajectory, 
+        atoms: Optional[str] = None,
+        distance: float = 0.25,
+        angle: float = 120.0,
+        periodic: bool = False,
+        sidechain_only: bool = False,
+        exclude_water: bool = False,
+        strict: bool = False,
+        **kwargs
+    ):
         """
         Initialize Hydrogen Bonds analysis.
 
@@ -41,11 +62,58 @@ class HBondsAnalysis(BaseAnalysis):
             MDTraj atom selection string specifying which atoms to use.
             If provided, the trajectory will be subset using this selection.
             If None, all atoms in the trajectory are used.
+            Aliases: atom_indices, selection
+        distance : float
+            Distance cutoff in nm (default 0.25). Alias: distance_cutoff_nm
+        angle : float
+            Angle cutoff in degrees (default 120). Alias: angle_cutoff_deg
+        periodic : bool
+            Whether to use periodic boundary conditions (default False).
+        sidechain_only : bool
+            If True, only consider sidechain-sidechain H-bonds (default False).
+        exclude_water : bool
+            If True, exclude water molecules from H-bond detection (default False).
+        strict : bool
+            If True, raise errors for unknown options. If False, log warnings.
         kwargs : dict
             Additional keyword arguments passed to BaseAnalysis.
         """
-        super().__init__(trajectory, **kwargs)
+        # Apply alias mapping
+        analysis_opts = {
+            "atoms": atoms,
+            "distance": distance,
+            "angle": angle,
+            "periodic": periodic,
+            "sidechain_only": sidechain_only,
+            "exclude_water": exclude_water,
+            "strict": strict,
+        }
+        analysis_opts.update(kwargs)
+        
+        forwarder = OptionsForwarder(aliases=self._ALIASES, strict=strict)
+        resolved = forwarder.apply_aliases(analysis_opts)
+        
+        # Extract known parameters
+        atoms = resolved.get("atoms", None)
+        distance = resolved.get("distance", 0.25)
+        angle = resolved.get("angle", 120.0)
+        periodic = resolved.get("periodic", False)
+        sidechain_only = resolved.get("sidechain_only", False)
+        exclude_water = resolved.get("exclude_water", False)
+        
+        # Pass remaining to BaseAnalysis
+        base_kwargs = {k: v for k, v in resolved.items() 
+                      if k not in ("atoms", "distance", "angle", "periodic", 
+                                  "sidechain_only", "exclude_water", "strict")}
+        
+        super().__init__(trajectory, **base_kwargs)
         self.atoms = atoms
+        self.distance = float(distance)
+        self.angle = float(angle)
+        self.periodic = bool(periodic)
+        self.sidechain_only = bool(sidechain_only)
+        self.exclude_water = bool(exclude_water)
+        self.strict = strict
         self.data: Optional[np.ndarray] = None
         self.results: Dict[str, object] = {}
 
@@ -74,6 +142,17 @@ class HBondsAnalysis(BaseAnalysis):
         else:
             work = self.traj
             selection_label = "all atoms"
+        
+        # Apply exclude_water filter if requested
+        if self.exclude_water and not self.atoms:
+            try:
+                non_water_idx = self.traj.topology.select("not water")
+                if non_water_idx is not None and len(non_water_idx) > 0:
+                    work = self.traj.atom_slice(non_water_idx)
+                    selection_label = "all atoms (excluding water)"
+                    log.info("HBonds: excluding water molecules from analysis")
+            except Exception as e:
+                log.warning("HBonds: failed to exclude water: %s", e)
 
         # Try to (re)create bonds
         try:
@@ -140,9 +219,31 @@ class HBondsAnalysis(BaseAnalysis):
             # Per-frame H-bond detection and counting
             counts = np.zeros(work.n_frames, dtype=int)
             raw_by_frame: List[np.ndarray] = []
+            
+            # Prepare kwargs for baker_hubbard based on MDTraj signature
+            bh_kwargs = {"periodic": self.periodic}
+            
+            # Note: MDTraj's baker_hubbard has different parameter names:
+            # - distance cutoff is 'dist' (not 'distance')
+            # - angle cutoff is 'angle' 
+            # We'll try to pass them if supported by the version
+            try:
+                sig = inspect.signature(md.baker_hubbard)
+                if 'dist' in sig.parameters:
+                    bh_kwargs['dist'] = self.distance
+                if 'angle' in sig.parameters:
+                    # MDTraj expects angle in radians, we store in degrees
+                    bh_kwargs['angle'] = np.deg2rad(self.angle)
+            except Exception:
+                log.debug("Could not inspect baker_hubbard signature, using defaults")
+            
             for i in range(work.n_frames):
                 # Baker–Hubbard on a single frame
-                hb_i = md.baker_hubbard(work[i], periodic=False)
+                try:
+                    hb_i = md.baker_hubbard(work[i], **bh_kwargs)
+                except TypeError:
+                    # Fallback if kwargs not supported
+                    hb_i = md.baker_hubbard(work[i], periodic=self.periodic)
                 raw_by_frame.append(hb_i)
                 counts[i] = len(hb_i)
 

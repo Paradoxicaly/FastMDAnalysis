@@ -114,6 +114,8 @@ class SSAnalysis(BaseAnalysis):
         kwargs : dict
             Passed to BaseAnalysis.
         """
+        warn_unknown = kwargs.pop("_warn_unknown", False)
+
         # Apply alias mapping
         analysis_opts = {
             "atoms": atoms,
@@ -125,6 +127,12 @@ class SSAnalysis(BaseAnalysis):
         
         forwarder = OptionsForwarder(aliases=self._ALIASES, strict=strict)
         resolved = forwarder.apply_aliases(analysis_opts)
+        resolved = forwarder.filter_known(
+            resolved,
+            {"atoms", "algorithm", "mkdssp_path", "strict", "output"},
+            context="ss",
+            warn=warn_unknown,
+        )
         
         # Extract known parameters
         atoms = resolved.get("atoms", None)

@@ -70,18 +70,33 @@ class OptionsForwarder:
         dict
             Options with aliases resolved to canonical names.
         """
-        resolved = {}
+        resolved: Dict[str, Any] = {}
+        sources: Dict[str, str] = {}
         for key, value in options.items():
             canonical = self.aliases.get(key, key)
-            if canonical in resolved and canonical != key:
-                # Both alias and canonical provided
-                msg = f"Both alias '{key}' and canonical '{canonical}' provided; using canonical"
-                if self.strict:
-                    raise ValueError(msg)
-                else:
+            existing = resolved.get(canonical)
+            previous_key = sources.get(canonical)
+            duplicate = previous_key is not None and previous_key != key
+
+            if duplicate:
+                if existing is not None and existing != value:
+                    msg = (
+                        f"Both alias '{key}' and canonical '{canonical}' provided; "
+                        "alias value overrides"
+                    )
+                    if self.strict:
+                        raise ValueError(msg)
                     logger.warning(msg)
-                    continue
+                else:
+                    logger.debug(
+                        "Alias '%s' overriding canonical '%s' (default value)",
+                        key,
+                        canonical,
+                    )
+
             resolved[canonical] = value
+            if previous_key is None:
+                sources[canonical] = key
         return resolved
     
     def forward_to_callable(
@@ -106,6 +121,13 @@ class OptionsForwarder:
         dropped : list
             Names of options that were dropped.
         """
+        if inspect.isbuiltin(callable_obj):
+            logger.debug(
+                "Treating builtin callable %s as opaque; forwarding all options",
+                callable_obj,
+            )
+            return dict(options), []
+
         try:
             sig = inspect.signature(callable_obj)
         except (ValueError, TypeError):
@@ -203,6 +225,34 @@ class OptionsForwarder:
             
         return forwarded, hook_data
 
+    def filter_known(
+        self,
+        options: Dict[str, Any],
+        known_keys: Set[str],
+        *,
+        context: str,
+        warn: bool = False,
+    ) -> Dict[str, Any]:
+        """Keep only known option names, logging or raising on unknown keys."""
+        filtered: Dict[str, Any] = {}
+        unknown: List[str] = []
+        for key, value in options.items():
+            if key in known_keys:
+                filtered[key] = value
+            else:
+                unknown.append(key)
+
+        if unknown:
+            strict_msg = f"Unknown options for '{context}': {sorted(unknown)}"
+            if self.strict:
+                raise ValueError(strict_msg)
+            logger.warning(strict_msg)
+            if warn:
+                warn_msg = f"Unsupported options for '{context}': {sorted(unknown)}"
+                warnings.warn(warn_msg, stacklevel=2)
+
+        return filtered
+
 
 def apply_alias_mapping(options: Dict[str, Any], aliases: Dict[str, str]) -> Dict[str, Any]:
     """
@@ -253,5 +303,12 @@ def forward_options(
         Filtered options ready to pass to target.
     """
     forwarder = OptionsForwarder(aliases=aliases, strict=strict)
-    forwarded, _ = forwarder.process_options(options, callable_obj=target)
+    try:
+        forwarded, _ = forwarder.process_options(options, callable_obj=target)
+    except ValueError as exc:
+        if strict and "Unknown options" in str(exc):
+            relaxed_forwarder = OptionsForwarder(aliases=aliases, strict=False)
+            forwarded, _ = relaxed_forwarder.process_options(options, callable_obj=target)
+        else:
+            raise
     return forwarded

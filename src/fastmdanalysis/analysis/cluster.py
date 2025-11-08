@@ -186,6 +186,8 @@ class ClusterAnalysis(BaseAnalysis):
         strict : bool
             If True, raise errors for unknown options. If False, log warnings.
         """
+        warn_unknown = kwargs.pop("_warn_unknown", False)
+
         # Apply alias mapping
         analysis_opts = {
             "methods": methods,
@@ -206,6 +208,23 @@ class ClusterAnalysis(BaseAnalysis):
         
         forwarder = OptionsForwarder(aliases=self._ALIASES, strict=strict)
         resolved = forwarder.apply_aliases(analysis_opts)
+        resolved = forwarder.filter_known(
+            resolved,
+            {
+                "methods",
+                "eps",
+                "min_samples",
+                "n_clusters",
+                "atoms",
+                "random_state",
+                "n_init",
+                "linkage_method",
+                "strict",
+                "output",
+            },
+            context="cluster",
+            warn=warn_unknown,
+        )
         
         # Extract known parameters
         methods = resolved.get("methods", "all")

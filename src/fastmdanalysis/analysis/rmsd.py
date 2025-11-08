@@ -99,6 +99,8 @@ class RMSDAnalysis(BaseAnalysis):
             Passed to BaseAnalysis (e.g., output directory).
         """
         # Extract analysis-specific options and apply aliases
+        warn_unknown = kwargs.pop("_warn_unknown", False)
+
         analysis_opts = {
             "reference_frame": reference_frame,
             "atoms": atoms,
@@ -110,6 +112,12 @@ class RMSDAnalysis(BaseAnalysis):
         # Apply alias mapping
         forwarder = OptionsForwarder(aliases=self._ALIASES, strict=strict)
         resolved = forwarder.apply_aliases(analysis_opts)
+        resolved = forwarder.filter_known(
+            resolved,
+            {"reference_frame", "atoms", "align", "strict", "output"},
+            context="rmsd",
+            warn=warn_unknown,
+        )
         
         # Extract known parameters
         reference_frame = resolved.get("reference_frame", 0)

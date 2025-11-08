@@ -78,6 +78,8 @@ class HBondsAnalysis(BaseAnalysis):
         kwargs : dict
             Additional keyword arguments passed to BaseAnalysis.
         """
+        warn_unknown = kwargs.pop("_warn_unknown", False)
+
         # Apply alias mapping
         analysis_opts = {
             "atoms": atoms,
@@ -92,6 +94,21 @@ class HBondsAnalysis(BaseAnalysis):
         
         forwarder = OptionsForwarder(aliases=self._ALIASES, strict=strict)
         resolved = forwarder.apply_aliases(analysis_opts)
+        resolved = forwarder.filter_known(
+            resolved,
+            {
+                "atoms",
+                "distance",
+                "angle",
+                "periodic",
+                "sidechain_only",
+                "exclude_water",
+                "strict",
+                "output",
+            },
+            context="hbonds",
+            warn=warn_unknown,
+        )
         
         # Extract known parameters
         atoms = resolved.get("atoms", None)
@@ -262,7 +279,7 @@ class HBondsAnalysis(BaseAnalysis):
                 note = Path(self.outdir) / "hbonds_NOTE.txt"
                 note.write_text(
                     "HBonds: your atom selection resulted in a topology with no bonds "
-                    "(e.g., Cα-only). FastMDAnalysis automatically fell back to 'protein' "
+                    "(e.g., C-alpha-only). FastMDAnalysis automatically fell back to 'protein' "
                     "or all atoms to compute hydrogen bonds.\n"
                 )
 

@@ -77,6 +77,8 @@ class SASAAnalysis(BaseAnalysis):
         kwargs : dict
             Passed to BaseAnalysis (e.g., output directory).
         """
+        warn_unknown = kwargs.pop("_warn_unknown", False)
+
         # Apply alias mapping
         analysis_opts = {
             "probe_radius": probe_radius,
@@ -88,6 +90,12 @@ class SASAAnalysis(BaseAnalysis):
         
         forwarder = OptionsForwarder(aliases=self._ALIASES, strict=strict)
         resolved = forwarder.apply_aliases(analysis_opts)
+        resolved = forwarder.filter_known(
+            resolved,
+            {"probe_radius", "atoms", "n_sphere_points", "strict", "output"},
+            context="sasa",
+            warn=warn_unknown,
+        )
         
         # Extract known parameters
         probe_radius = resolved.get("probe_radius", 0.14)

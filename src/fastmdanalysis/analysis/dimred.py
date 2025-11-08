@@ -107,6 +107,8 @@ class DimRedAnalysis(BaseAnalysis):
         strict: bool = False,
         **kwargs
     ):
+        warn_unknown = kwargs.pop("_warn_unknown", False)
+
         # Apply alias mapping
         analysis_opts = {
             "methods": methods,
@@ -123,6 +125,22 @@ class DimRedAnalysis(BaseAnalysis):
         
         forwarder = OptionsForwarder(aliases=self._ALIASES, strict=strict)
         resolved = forwarder.apply_aliases(analysis_opts)
+        resolved = forwarder.filter_known(
+            resolved,
+            {
+                "methods",
+                "atoms",
+                "output",
+                "n_components",
+                "random_state",
+                "perplexity",
+                "max_iter",
+                "metric",
+                "strict",
+            },
+            context="dimred",
+            warn=warn_unknown,
+        )
         
         # Extract known parameters
         methods = resolved.get("methods", "all")

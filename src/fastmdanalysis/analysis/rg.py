@@ -65,6 +65,8 @@ class RGAnalysis(BaseAnalysis):
         kwargs : dict
             Passed to BaseAnalysis (e.g., output directory).
         """
+        warn_unknown = kwargs.pop("_warn_unknown", False)
+
         # Apply alias mapping
         analysis_opts = {
             "atoms": atoms,
@@ -75,6 +77,12 @@ class RGAnalysis(BaseAnalysis):
         
         forwarder = OptionsForwarder(aliases=self._ALIASES, strict=strict)
         resolved = forwarder.apply_aliases(analysis_opts)
+        resolved = forwarder.filter_known(
+            resolved,
+            {"atoms", "mass_weighted", "strict", "output"},
+            context="rg",
+            warn=warn_unknown,
+        )
         
         # Extract known parameters
         atoms = resolved.get("atoms", None)

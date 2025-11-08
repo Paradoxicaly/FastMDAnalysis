@@ -462,3 +462,19 @@ def test_mixed_aliases_and_canonical(traj, outdir):
     assert analysis.reference_frame == 0
     assert analysis.atoms == "protein"
     assert analysis.align is True
+
+def test_fastmda_analyze_forwards_options(fastmda, tmp_path):
+    """Ensure FastMDAnalysis.analyze forwards permissive options to analyses."""
+    opts = {"rmsd": {"align": False}}
+    results = fastmda.analyze(include=["rmsd"], options=opts, output=tmp_path / "forward_out")
+
+    rmsd_result = results["rmsd"]
+    assert rmsd_result.ok
+    assert rmsd_result.value.align is False
+
+
+def test_fastmda_analyze_strict_mode_raises_on_unknown(fastmda):
+    """Strict mode should raise when unknown options are supplied."""
+    opts = {"rmsd": {"bogus_option": 123}}
+    with pytest.raises(ValueError, match="Unknown options"):
+        fastmda.analyze(include=["rmsd"], options=opts, strict=True)

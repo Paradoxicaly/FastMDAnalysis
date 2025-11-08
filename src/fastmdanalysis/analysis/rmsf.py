@@ -75,6 +75,8 @@ class RMSFAnalysis(BaseAnalysis):
         kwargs : dict
             Passed through to BaseAnalysis (e.g., output).
         """
+        warn_unknown = kwargs.pop("_warn_unknown", False)
+
         # Apply alias mapping
         analysis_opts = {
             "atoms": atoms,
@@ -82,9 +84,15 @@ class RMSFAnalysis(BaseAnalysis):
             "strict": strict,
         }
         analysis_opts.update(kwargs)
-        
+
         forwarder = OptionsForwarder(aliases=self._ALIASES, strict=strict)
         resolved = forwarder.apply_aliases(analysis_opts)
+        resolved = forwarder.filter_known(
+            resolved,
+            {"atoms", "per_residue", "strict", "output", "reference_frame"},
+            context="rmsf",
+            warn=warn_unknown,
+        )
         
         # Extract known parameters
         atoms = resolved.get("atoms", None)
@@ -138,13 +146,17 @@ class RMSFAnalysis(BaseAnalysis):
                 n_residues = int(max(atom_to_residue) + 1) if atom_to_residue.size else 0
                 per_residue_rmsf = np.zeros(n_residues, dtype=float)
                 for r in range(n_residues):
-                    mask = (atom_to_residue == r)
+                    mask = atom_to_residue == r
                     if np.any(mask):
                         per_residue_rmsf[r] = np.mean(rmsf_values[mask])
-                
+
                 self.results["rmsf_per_residue"] = per_residue_rmsf.reshape(-1, 1)
-                self._save_data(per_residue_rmsf.reshape(-1, 1), "rmsf_per_residue", 
-                              header="rmsf_per_residue_nm", fmt="%.6f")
+                self._save_data(
+                    per_residue_rmsf.reshape(-1, 1),
+                    "rmsf_per_residue",
+                    header="rmsf_per_residue_nm",
+                    fmt="%.6f",
+                )
                 logger.info("RMSF: per-residue aggregation computed (%d residues)", n_residues)
 
             # Save data and a default plot

@@ -58,8 +58,32 @@ except ImportError:
 
 # Number of iterations for averaging
 NUM_ITERATIONS = 5
-FRAME_SLICE = (0, None, 1)
 CLUSTER_METHODS = ['kmeans', 'dbscan', 'hierarchical']
+
+# Dataset configurations
+DATASETS = [
+    {
+        'name': 'TrpCage_5000',
+        'traj': str(Path(__file__).parent / 'src' / 'fastmdanalysis' / 'data' / 'trp_cage.dcd'),
+        'top': str(Path(__file__).parent / 'src' / 'fastmdanalysis' / 'data' / 'trp_cage.pdb'),
+        'frames': (0, None, 1),  # All frames, no stride
+        'description': 'TrpCage, ~5000 frames (no stride)'
+    },
+    {
+        'name': 'Ubiquitin_5000',
+        'traj': str(Path(__file__).parent / 'Ubiquitin' / 'Q99.dcd'),
+        'top': str(Path(__file__).parent / 'Ubiquitin' / 'topology.pdb'),
+        'frames': (0, None, 1),  # All frames, no stride
+        'description': 'Ubiquitin, 5000 frames (no stride)'
+    },
+    {
+        'name': 'Ubiquitin_500',
+        'traj': str(Path(__file__).parent / 'Ubiquitin' / 'Q99.dcd'),
+        'top': str(Path(__file__).parent / 'Ubiquitin' / 'topology.pdb'),
+        'frames': (0, None, 10),  # Every 10th frame
+        'description': 'Ubiquitin, 500 frames (stride=10)'
+    }
+]
 
 # Tool colors for consistent visualization
 TOOL_COLORS = {
@@ -158,7 +182,7 @@ def _count_effective_loc(source_lines):
 
 
 FASTMDA_MINIMAL_SNIPPET = [
-    "fastmda = FastMDAnalysis(TrpCage.traj, TrpCage.top, frames=FRAME_SLICE, atoms=\"protein\", keep_full_traj=False)",
+    "fastmda = FastMDAnalysis(traj_path, top_path, frames=frames, atoms=\"protein\", keep_full_traj=False)",
     "fastmda.analyze(include=['rmsd', 'rmsf', 'rg', 'cluster'], verbose=False, output='fastmda_analyze_output', options={'rmsd': {'save_data': False, 'store_results': False}, 'rmsf': {'save_data': False, 'store_results': False}, 'rg': {'save_data': False, 'store_results': False}, 'cluster': {'methods': ['kmeans', 'dbscan', 'hierarchical'], 'n_clusters': 3, 'eps': 0.5, 'min_samples': 2, 'plot_style': 'minimal', 'combined_plot_name': 'cluster', 'feature_mode': 'distance', 'save_data': False, 'store_results': False}})"
 ]
 
@@ -259,16 +283,16 @@ def generate_cli_command_slide(command_data):
     return output_file
 
 
-def benchmark_fastmda_single(output_dir):
+def benchmark_fastmda_single(output_dir, traj_path, top_path, frames):
     """FastMDA full workflow - single run with basic figures only"""
     mem_monitor = MemoryMonitor()
     start = time.time()
     
     # Initialize FastMDA
     fastmda = FastMDAnalysis(
-        TrpCage.traj,
-        TrpCage.top,
-        frames=FRAME_SLICE,
+        traj_path,
+        top_path,
+        frames=frames,
         atoms="protein",
         keep_full_traj=False,
     )
@@ -312,14 +336,18 @@ def benchmark_fastmda_single(output_dir):
     return runtime, peak_memory
 
 
-def benchmark_mdtraj_single(output_dir):
+def benchmark_mdtraj_single(output_dir, traj_path, top_path, frames):
     """MDTraj full workflow - single run with basic figures only (matching FastMDA)"""
     mem_monitor = MemoryMonitor()
     start = time.time()
     
     # Load and prepare trajectory
-    traj = md.load(TrpCage.traj, top=TrpCage.top)
-    traj = traj[:]
+    traj = md.load(traj_path, top=top_path)
+    # Apply frame selection
+    if frames[2] > 1:  # If stride is specified
+        traj = traj[frames[0]:frames[1]:frames[2]]
+    else:
+        traj = traj[frames[0]:frames[1]]
     atom_indices = traj.topology.select('protein')
     traj = traj.atom_slice(atom_indices)
     mem_monitor.update()
@@ -408,7 +436,7 @@ def benchmark_mdtraj_single(output_dir):
     return runtime, peak_memory
 
 
-def benchmark_mdanalysis_single(output_dir):
+def benchmark_mdanalysis_single(output_dir, traj_path, top_path, frames):
     """MDAnalysis full workflow - single run with basic figures only (matching FastMDA)"""
     if not HAS_MDANALYSIS:
         return None, None
@@ -417,9 +445,16 @@ def benchmark_mdanalysis_single(output_dir):
     start = time.time()
     
     # Load trajectory
-    u = mda.Universe(TrpCage.top, TrpCage.traj)
+    u = mda.Universe(top_path, traj_path)
     protein = u.select_atoms('protein')
-    frame_list = list(range(len(u.trajectory)))
+    # Apply frame selection
+    if frames[2] > 1:  # If stride is specified
+        frame_list = list(range(frames[0] if frames[0] else 0, 
+                                frames[1] if frames[1] else len(u.trajectory), 
+                                frames[2]))
+    else:
+        frame_list = list(range(frames[0] if frames[0] else 0, 
+                                frames[1] if frames[1] else len(u.trajectory)))
     mem_monitor.update()
     
     # RMSD computation and plot (1 figure)
@@ -527,10 +562,10 @@ def benchmark_mdanalysis_single(output_dir):
     return runtime, peak_memory
 
 
-def benchmark_fastmda():
+def benchmark_fastmda(traj_path, top_path, frames, dataset_name):
     """Run FastMDA workflow multiple times"""
     print("\n" + "="*70)
-    print("FastMDAnalysis - Full Workflow (with figures, no slides)")
+    print(f"FastMDAnalysis - {dataset_name}")
     print("="*70)
     print(f"Running {NUM_ITERATIONS} iterations...")
     
@@ -540,7 +575,7 @@ def benchmark_fastmda():
     for i in range(NUM_ITERATIONS):
         # Create temporary directory for output
         with tempfile.TemporaryDirectory() as tmpdir:
-            runtime, memory = benchmark_fastmda_single(tmpdir)
+            runtime, memory = benchmark_fastmda_single(tmpdir, traj_path, top_path, frames)
             runtimes.append(runtime)
             memories.append(memory)
             print(f"  Iteration {i+1}/{NUM_ITERATIONS}: {runtime:.3f}s, {memory:.1f} MB")
@@ -563,10 +598,10 @@ def benchmark_fastmda():
     }
 
 
-def benchmark_mdtraj():
+def benchmark_mdtraj(traj_path, top_path, frames, dataset_name):
     """Run MDTraj workflow multiple times"""
     print("\n" + "="*70)
-    print("MDTraj - Full Workflow (with figures)")
+    print(f"MDTraj - {dataset_name}")
     print("="*70)
     print(f"Running {NUM_ITERATIONS} iterations...")
     
@@ -576,7 +611,7 @@ def benchmark_mdtraj():
     for i in range(NUM_ITERATIONS):
         # Create temporary directory for output
         with tempfile.TemporaryDirectory() as tmpdir:
-            runtime, memory = benchmark_mdtraj_single(tmpdir)
+            runtime, memory = benchmark_mdtraj_single(tmpdir, traj_path, top_path, frames)
             runtimes.append(runtime)
             memories.append(memory)
             print(f"  Iteration {i+1}/{NUM_ITERATIONS}: {runtime:.3f}s, {memory:.1f} MB")
@@ -599,14 +634,14 @@ def benchmark_mdtraj():
     }
 
 
-def benchmark_mdanalysis():
+def benchmark_mdanalysis(traj_path, top_path, frames, dataset_name):
     """Run MDAnalysis workflow multiple times"""
     if not HAS_MDANALYSIS:
         print("\nMDAnalysis not available - skipping")
         return None
     
     print("\n" + "="*70)
-    print("MDAnalysis - Full Workflow (with figures)")
+    print(f"MDAnalysis - {dataset_name}")
     print("="*70)
     print(f"Running {NUM_ITERATIONS} iterations...")
     
@@ -616,7 +651,7 @@ def benchmark_mdanalysis():
     for i in range(NUM_ITERATIONS):
         # Create temporary directory for output
         with tempfile.TemporaryDirectory() as tmpdir:
-            runtime, memory = benchmark_mdanalysis_single(tmpdir)
+            runtime, memory = benchmark_mdanalysis_single(tmpdir, traj_path, top_path, frames)
             if runtime is None:
                 return None
             runtimes.append(runtime)
@@ -641,10 +676,10 @@ def benchmark_mdanalysis():
     }
 
 
-def create_benchmark_plots(results):
+def create_benchmark_plots(results, dataset_name, dataset_desc):
     """Create benchmark comparison plots"""
     print("\n" + "="*70)
-    print("GENERATING PLOTS")
+    print(f"GENERATING PLOTS FOR {dataset_name}")
     print("="*70)
     
     # Extract data
@@ -703,12 +738,12 @@ def create_benchmark_plots(results):
                 ha='center', va='bottom', fontsize=11, fontweight='bold')
     
     plt.suptitle(f'FastMDAnalysis Full Workflow Benchmark\n'
-                 f'TrpCage (500 frames) - RMSD, RMSF, RG, Cluster (with figures)\n'
+                 f'{dataset_desc} - RMSD, RMSF, RG, Cluster (with figures)\n'
                  f'Averaged over {NUM_ITERATIONS} iterations',
                  fontweight='bold', fontsize=14)
     plt.tight_layout()
     
-    output_file = 'benchmark_full_workflow.png'
+    output_file = f'benchmark_full_workflow_{dataset_name}.png'
     plt.savefig(output_file, dpi=300, bbox_inches='tight')
     print(f"✓ Saved: {output_file}")
     plt.close()
@@ -716,9 +751,9 @@ def create_benchmark_plots(results):
     return output_file
 
 
-def create_summary_table(results):
+def create_summary_table(results, dataset_name, dataset_desc):
     """Create summary table visualization"""
-    print("Creating summary table...")
+    print(f"Creating summary table for {dataset_name}...")
     
     fig, ax = plt.subplots(figsize=(12, 6))
     
@@ -761,19 +796,19 @@ def create_summary_table(results):
     
     ax.axis('off')
     ax.set_title(f'FastMDAnalysis Full Workflow Benchmark Summary\n'
+                 f'{dataset_desc}\n'
                  f'Averaged over {NUM_ITERATIONS} iterations',
                  fontweight='bold', fontsize=14, pad=20)
     
     # Add footer
     footer_text = (
-        f'Dataset: TrpCage, 500 frames (frames 0,-1,10)\n'
         f'Analyses: RMSD, RMSF, RG, Cluster (KMeans, DBSCAN, Hierarchical)\n'
         f'Workflow: Complete analysis with figure generation (no slides)'
     )
     fig.text(0.5, 0.05, footer_text, ha='center', fontsize=10, style='italic',
              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
     
-    output_file = 'benchmark_summary_table.png'
+    output_file = f'benchmark_summary_table_{dataset_name}.png'
     plt.savefig(output_file, dpi=300, bbox_inches='tight')
     print(f"✓ Saved: {output_file}")
     plt.close()
@@ -783,66 +818,88 @@ def create_summary_table(results):
 
 def main():
     print("="*70)
-    print("FASTMDANALYSIS FULL WORKFLOW BENCHMARK")
+    print("FASTMDANALYSIS FULL WORKFLOW BENCHMARK - MULTI-DATASET")
     print("="*70)
-    print("Dataset: TrpCage, 500 frames (frames 0,-1,10)")
     print("Analyses: RMSD, RMSF, RG, Cluster (KMeans, DBSCAN, Hierarchical)")
     print("Workflow: Complete with figure generation (excluding slides)")
-    print(f"Iterations: {NUM_ITERATIONS} runs per library")
+    print(f"Iterations: {NUM_ITERATIONS} runs per library per dataset")
     print("Metrics: Runtime (wall clock) and Peak Memory Usage")
     print("="*70)
-    
-    results = []
-    
-    # Run benchmarks
-    results.append(benchmark_fastmda())
-    results.append(benchmark_mdtraj())
-    mda_result = benchmark_mdanalysis()
-    if mda_result:
-        results.append(mda_result)
-    
-    # Print summary
-    print("\n" + "="*70)
-    print(f"SUMMARY (AVERAGED OVER {NUM_ITERATIONS} ITERATIONS)")
-    print("="*70)
-    for r in results:
-        print(f"{r['name']:20s}:")
-        print(f"  Runtime: {r['runtime_avg']:6.2f}s ± {r['runtime_std']:5.2f}s")
-        print(f"  Memory:  {r['memory_avg']:6.1f} MB ± {r['memory_std']:5.1f} MB")
+    print(f"\nDatasets to benchmark ({len(DATASETS)}):")
+    for i, ds in enumerate(DATASETS, 1):
+        print(f"  {i}. {ds['name']}: {ds['description']}")
     print("="*70)
     
-    # Calculate speedup
-    if len(results) >= 2:
-        fastmda_time = results[0]['runtime_avg']
-        mdtraj_time = results[1]['runtime_avg']
-        ratio = fastmda_time / mdtraj_time
-        print(f"\nFastMDA/MDTraj runtime ratio: {ratio:.2f}x")
+    all_generated_files = []
+    
+    # Run benchmarks for each dataset
+    for dataset in DATASETS:
+        dataset_name = dataset['name']
+        dataset_desc = dataset['description']
+        traj_path = dataset['traj']
+        top_path = dataset['top']
+        frames = dataset['frames']
         
-        fastmda_mem = results[0]['memory_avg']
-        mdtraj_mem = results[1]['memory_avg']
-        mem_ratio = fastmda_mem / mdtraj_mem
-        print(f"FastMDA/MDTraj memory ratio: {mem_ratio:.2f}x")
-    
-    # Generate plots and summary artefacts
-    create_benchmark_plots(results)
-    create_summary_table(results)
+        print(f"\n{'='*70}")
+        print(f"BENCHMARKING DATASET: {dataset_name}")
+        print(f"Description: {dataset_desc}")
+        print(f"{'='*70}")
+        
+        results = []
+        
+        # Run benchmarks for all three libraries
+        results.append(benchmark_fastmda(traj_path, top_path, frames, dataset_name))
+        results.append(benchmark_mdtraj(traj_path, top_path, frames, dataset_name))
+        mda_result = benchmark_mdanalysis(traj_path, top_path, frames, dataset_name)
+        if mda_result:
+            results.append(mda_result)
+        
+        # Print summary for this dataset
+        print(f"\n{'='*70}")
+        print(f"SUMMARY FOR {dataset_name} (AVERAGED OVER {NUM_ITERATIONS} ITERATIONS)")
+        print(f"{'='*70}")
+        for r in results:
+            print(f"{r['name']:20s}:")
+            print(f"  Runtime: {r['runtime_avg']:6.2f}s ± {r['runtime_std']:5.2f}s")
+            print(f"  Memory:  {r['memory_avg']:6.1f} MB ± {r['memory_std']:5.1f} MB")
+        print("="*70)
+        
+        # Calculate speedup
+        if len(results) >= 2:
+            fastmda_time = results[0]['runtime_avg']
+            mdtraj_time = results[1]['runtime_avg']
+            ratio = fastmda_time / mdtraj_time
+            print(f"\nFastMDA/MDTraj runtime ratio: {ratio:.2f}x")
+            
+            fastmda_mem = results[0]['memory_avg']
+            mdtraj_mem = results[1]['memory_avg']
+            mem_ratio = fastmda_mem / mdtraj_mem
+            print(f"FastMDA/MDTraj memory ratio: {mem_ratio:.2f}x")
+        
+        # Generate plots and summary artefacts for this dataset
+        plot_file = create_benchmark_plots(results, dataset_name, dataset_desc)
+        table_file = create_summary_table(results, dataset_name, dataset_desc)
+        
+        all_generated_files.append(plot_file)
+        all_generated_files.append(table_file)
 
+    # Generate LOC and CLI slides (only once, not per dataset)
     loc_data = compute_loc_benchmark()
     print("\nGenerating LOC slide...")
-    generate_loc_slide(loc_data)
+    loc_file = generate_loc_slide(loc_data)
+    all_generated_files.append(loc_file)
 
     print("\nGenerating CLI command slide...")
     command_data = compute_cli_command_counts()
-    generate_cli_command_slide(command_data)
+    cli_file = generate_cli_command_slide(command_data)
+    all_generated_files.append(cli_file)
     
     print("\n" + "="*70)
-    print("BENCHMARK COMPLETE")
+    print("BENCHMARK COMPLETE - ALL DATASETS")
     print("="*70)
-    print("\nGenerated files:")
-    print("  • benchmark_full_workflow.png - Runtime and memory comparison")
-    print("  • benchmark_summary_table.png - Detailed summary table")
-    print("  • benchmark_loc_slide.png - Lines-of-code comparison")
-    print("  • benchmark_cli_commands.png - CLI command count visualization")
+    print(f"\nGenerated {len(all_generated_files)} files:")
+    for f in all_generated_files:
+        print(f"  • {f}")
     print("="*70)
 
 
